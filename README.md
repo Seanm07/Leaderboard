@@ -1,4 +1,4 @@
-# 🏆 GamePickle Internal Leaderboard System 🏆
+# 🏆 Game Pickle Internal Leaderboard System 🏆
 Compatible and tested with Unity 4, Unity 5 and Unity 2017.
 It works by sending GET requests to our server which runs mysql queries which are cached with memcaching and flushed upon submitting new scores.
 
