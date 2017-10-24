@@ -138,6 +138,7 @@ Calling this function when the rank has been requested but isn't ready yet will 
 ---
 
 ### Quick references
+```c#
 LeaderboardManager.IsLeaderboardReady(string leaderboardId)
 LeaderboardManager.IsLeaderboardError(string leaderboardId)
 LeaderboardManager.IsLeaderboardActive(string leaderboardId)
@@ -154,3 +155,4 @@ LeaderboardManager.GetRank(string leaderboardId)
 LeaderboardManager.GetLeaderboardData(string leaderboardId, string deviceId = "", TimePeriod timePeriod = TimePeriod.AllTime, int pageNum = 0)
 LeaderboardManager.GetLeaderboardRankData(string leaderboardId, int score, TimePeriod timePeriod = TimePeriod.AllTime, string deviceId = "")
 LeaderboardManager.SetLeaderboardData(string leaderboardId, string deviceId, string nickname, int score)
+```
