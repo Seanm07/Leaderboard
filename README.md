@@ -1,5 +1,5 @@
 # Leaderboard
-Compatible with Unity 4 and later
+Compatible and tested with Unity 4, Unity 5 and Unity 2017
 
 ## Setup
 - Import LeaderboardManager.cs
