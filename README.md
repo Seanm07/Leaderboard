@@ -16,7 +16,7 @@ Wrote this as fast as possible so if there's any important information missing j
 ## Example Scripts
 **Set 'today' and 'all time' rank labels on a level complete screen** - This is a script extracted from a working game to be used as reference. Don't just put it directly into your project and expect it to work as there's calls to other scripts you won't have!
 
-https://pastebin.com/qFhFwWCL
+https://pastebin.com/N0Pt7Aek
 
 ---
 
