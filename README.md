@@ -1,5 +1,6 @@
-# Leaderboard
-Compatible and tested with Unity 4, Unity 5 and Unity 2017
+# Sean's GamePickle Leaderboard
+Compatible and tested with Unity 4, Unity 5 and Unity 2017.
+It works by sending GET requests to our server which runs mysql queries which are cached with memcaching and flushed upon submitting new scores.
 
 ## Setup
 - Import LeaderboardManager.cs
@@ -118,41 +119,62 @@ Calling this function when the rank has been requested but isn't ready yet will 
 
 ### Send a request to get leaderboard data
 ```c#
-
+LeaderboardManager.GetLeaderboardData("Mode_1_Mission_4_AllTime", "", TimePeriod.AllTime, 0);
 ```
+The above function call will send a request for the first page of leaderboard rows from all time for mode 1, mission 4 for example.
+
+As we left the deviceId field as an empty string it will return results from all devices which submitted a score into this leaderboard. However if we only want results for a certain device we simply set the deviceId here and only leaderboard submissions from that user will be shown.
+
+We can also change the time period to TimePeriod.Today if we only want the past 24 hours of results to be returned.
+
+When choosing your leaderboardIds make sure to keep them unique if you're wanting to display multiple leaderboards at once. In this example I included the time period in the leaderboardId because I wanted to have TimePeriod.AllTime and TimePeriod.Today working alongside each other as tabs on the leaderboard.
+
+If you wanted to load multiple pages of leaderboards at once you might also want to include the page number in the leaderboardId too.
+
+Leaderboard results are ordered descending in rank, so the highest score is returned first and lowest last.
 
 ---
 
 ### Send a request to get rank data
 ```c#
-
+LeaderboardManager.GetRankData("Mode_1_Mission_4_AllTime", Mathf.RoundToInt(myTimedScore * 100f), "", TimePeriod.AllTime);
 ```
+The rank works similarly to the leaderboard requests so read that first.
+
+This function returns what rank a score would be if it was in a leaderboard without needing to return every page of the leaderboard to find where the score would fit in.
+
+Leaderboard scores are stored as ints and ranked by highest value to lowest value. In this example the miliseconds are taken into consideration in the score so we're multiplying the final time by 100 and rounding it to an int for storage.
 
 ---
 
 ### Send a request to add a score to the leaderboard
 ```c#
-
+LeaderboardManager.SetLeaderboardData("Mode_1_Mission_4_AllTime", GoogleAnalytics.Instance.clientID, "Cool Guy 123", Mathf.RoundToInt(myTimedScore * 100f));
 ```
+Submits a score into the leaderboard, note that a device id is required for this function.
+
+The clientID must be unique to the player, if your game has permissions to grab the player email then go ahead and use that if you want to allow leaderboard submission per user rather than per device. But for most uses the clientID we generate in the GoogleAnalytics script is good enough for this.
+
+The nickname is just a name for the player to identifier theirselves and let others see, it's important to note that 
 
 ---
 
 ### Quick references
 ```c#
-LeaderboardManager.IsLeaderboardReady(string leaderboardId)
-LeaderboardManager.IsLeaderboardError(string leaderboardId)
-LeaderboardManager.IsLeaderboardActive(string leaderboardId)
+LeaderboardManager.IsLeaderboardReady(string leaderboardId);
+LeaderboardManager.IsLeaderboardError(string leaderboardId);
+LeaderboardManager.IsLeaderboardActive(string leaderboardId);
 
-LeaderboardManager.IsSubmitActive()
+LeaderboardManager.IsSubmitActive();
 
-LeaderboardManager.IsRankReady(string leaderboardId)
-LeaderboardManager.IsRankError(string leaderboardId)
-LeaderboardManager.IsRankActive(string leaderboardId)
+LeaderboardManager.IsRankReady(string leaderboardId);
+LeaderboardManager.IsRankError(string leaderboardId);
+LeaderboardManager.IsRankActive(string leaderboardId);
 
-LeaderboardManager.GetLeaderboard(string leaderboardId)
-LeaderboardManager.GetRank(string leaderboardId)
+LeaderboardManager.GetLeaderboard(string leaderboardId);
+LeaderboardManager.GetRank(string leaderboardId);
 
-LeaderboardManager.GetLeaderboardData(string leaderboardId, string deviceId = "", TimePeriod timePeriod = TimePeriod.AllTime, int pageNum = 0)
-LeaderboardManager.GetLeaderboardRankData(string leaderboardId, int score, TimePeriod timePeriod = TimePeriod.AllTime, string deviceId = "")
-LeaderboardManager.SetLeaderboardData(string leaderboardId, string deviceId, string nickname, int score)
+LeaderboardManager.GetLeaderboardData(string leaderboardId, string deviceId = "", TimePeriod timePeriod = TimePeriod.AllTime, int pageNum = 0);
+LeaderboardManager.GetLeaderboardRankData(string leaderboardId, int score, TimePeriod timePeriod = TimePeriod.AllTime, string deviceId = "");
+LeaderboardManager.SetLeaderboardData(string leaderboardId, string deviceId, string nickname, int score);
 ```
