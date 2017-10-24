@@ -172,6 +172,7 @@ public class LeaderboardManager : MonoBehaviour {
 		// Reset the ready and error status
 		selfRef.rankStorage[leaderboardId].isReady = false;
 		selfRef.rankStorage[leaderboardId].isError = false;
+		selfRef.rankStorage[leaderboardId].isActive = false;
 	}
 
 	private void SetupLeaderboardsKey(string leaderboardId)
@@ -183,6 +184,7 @@ public class LeaderboardManager : MonoBehaviour {
 		// Reset the ready and error status
 		selfRef.leaderboardStorage[leaderboardId].isReady = false;
 		selfRef.leaderboardStorage[leaderboardId].isError = false;
+		selfRef.leaderboardStorage[leaderboardId].isActive = false;
 	}
 
 	// Send a request for the leaderboard submissions within the requested leaderboard (only from this device if DeviceId is defined)
@@ -245,8 +247,6 @@ public class LeaderboardManager : MonoBehaviour {
 		if(!IsSubmitActive()){
 			// Don't even bother starting the routine if we don't have a working internet connection
 			if(Application.internetReachability != NetworkReachability.NotReachable){
-				selfRef.isScoreSubmitting = true;
-
 				// Start the leaderboard routine, this will send a server request to submit the score
 				selfRef.StartCoroutine(selfRef.DoSetLeaderboardData(leaderboardId, deviceId, nickname, score));
 			} else {
@@ -267,6 +267,9 @@ public class LeaderboardManager : MonoBehaviour {
 
 	private IEnumerator DoGetLeaderboardRankData(string leaderboardId, int score, TimePeriod timePeriod = TimePeriod.AllTime, string deviceId = "")
 	{
+		// Mark the rank as active (being processed)
+		rankStorage[leaderboardId].isActive = true;
+
 		string requestURL = "http://data.i6.com/datastore.php?";
 
 		// The queryString variable is setup to match the PHP $_SERVER['QUERY_STRING'] variable
@@ -297,6 +300,7 @@ public class LeaderboardManager : MonoBehaviour {
 			GoogleAnalytics.Instance.LogError("Failed to get leaderboard rank data! " + leaderboardRankRequest.error);
 
 			rankStorage[leaderboardId].isError = true;
+			rankStorage[leaderboardId].isActive = false;
 
 			if(debugMode)
 				Debug.Log("[DEBUG] Rank failed for " + leaderboardId + " error: " + leaderboardRankRequest.error);
@@ -310,7 +314,10 @@ public class LeaderboardManager : MonoBehaviour {
 		string errorResponse;
 
 		if(IsErrorResponse(leaderboardId, leaderboardRankRequest.text, out errorResponse)){
+			GoogleAnalytics.Instance.LogError("Failed to get leaderboard rank data! " + errorResponse);
+
 			rankStorage[leaderboardId].isError = true;
+			rankStorage[leaderboardId].isActive = false;
 
 			if(debugMode)
 				Debug.Log("[DEBUG] Rank failed for " + leaderboardId + " error: " + errorResponse);
@@ -334,6 +341,7 @@ public class LeaderboardManager : MonoBehaviour {
 			GoogleAnalytics.Instance.LogError("Rank JSON data invalid!" + e.Message, false);
 
 			rankStorage[leaderboardId].isError = true;
+			rankStorage[leaderboardId].isActive = false;
 
 			if(debugMode)
 				Debug.Log("[DEBUG] Rank failed for " + leaderboardId + " error: " + e.Message);
@@ -348,6 +356,7 @@ public class LeaderboardManager : MonoBehaviour {
 		leaderboardRankRequest.Dispose();
 
 		rankStorage[leaderboardId].isReady = true;
+		rankStorage[leaderboardId].isActive = false;
 
 		if(debugMode)
 			Debug.Log("[DEBUG] Rank ready for " + leaderboardId + " rank is " + rankStorage[leaderboardId].response);
@@ -359,6 +368,9 @@ public class LeaderboardManager : MonoBehaviour {
 
 	private IEnumerator DoGetLeaderboardData(string leaderboardId, string deviceId = "", TimePeriod timePeriod = TimePeriod.AllTime, int pageNum = 0)
 	{
+		// Mark the rank as active (being processed)
+		leaderboardStorage[leaderboardId].isActive = true;
+
 		string requestURL = "http://data.i6.com/datastore.php?";
 
 		// The queryString variable is setup to match the PHP $_SERVER['QUERY_STRING'] variable
@@ -390,6 +402,7 @@ public class LeaderboardManager : MonoBehaviour {
 			GoogleAnalytics.Instance.LogError("Failed to get leaderboard data! " + leaderboardRequest.error);
 
 			leaderboardStorage[leaderboardId].isError = true;
+			leaderboardStorage[leaderboardId].isActive = false;
 
 			if(debugMode)
 				Debug.Log("[DEBUG] Leaderboard failed for " + leaderboardId + " error: " + leaderboardRequest.error);
@@ -403,7 +416,10 @@ public class LeaderboardManager : MonoBehaviour {
 		string errorResponse;
 
 		if(IsErrorResponse(leaderboardId, leaderboardRequest.text, out errorResponse)){
+			GoogleAnalytics.Instance.LogError("Failed to get leaderboard data! " + errorResponse);
+
 			leaderboardStorage[leaderboardId].isError = true;
+			leaderboardStorage[leaderboardId].isActive = false;
 
 			if(debugMode)
 				Debug.Log("[DEBUG] Leaderboard failed for " + leaderboardId + " error: " + errorResponse);
@@ -441,6 +457,7 @@ public class LeaderboardManager : MonoBehaviour {
 			GoogleAnalytics.Instance.LogError("Leaderboard JSON data invalid!" + e.Message, false);
 
 			leaderboardStorage[leaderboardId].isError = true;
+			leaderboardStorage[leaderboardId].isActive = false;
 
 			if(debugMode)
 				Debug.Log("[DEBUG] Leaderboard failed for " + leaderboardId + " error: " + e.Message);
@@ -454,6 +471,7 @@ public class LeaderboardManager : MonoBehaviour {
 		leaderboardRequest.Dispose();
 
 		leaderboardStorage[leaderboardId].isReady = true;
+		leaderboardStorage[leaderboardId].isActive = false;
 
 		if(debugMode)
 			Debug.Log("[DEBUG] Leaderboard ready for " + leaderboardId + " found " + leaderboardStorage[leaderboardId].Count() + " rows");
@@ -466,6 +484,8 @@ public class LeaderboardManager : MonoBehaviour {
 	// Setting the leaderboard doesn't touch the Leaderboards[..] data just incase we're reading at the same time as submitting
 	private IEnumerator DoSetLeaderboardData(string leaderboardId, string deviceId, string nickname, int score)
 	{
+		isScoreSubmitting = true;
+
 		string requestURL = "http://data.i6.com/datastore.php?";
 
 		// The queryString variable is setup to match the PHP $_SERVER['QUERY_STRING'] variable
@@ -510,6 +530,8 @@ public class LeaderboardManager : MonoBehaviour {
 		string errorResponse;
 
 		if(IsErrorResponse(leaderboardId, leaderboardRequest.text, out errorResponse)){
+			GoogleAnalytics.Instance.LogError("Failed to submit leaderboard! " + errorResponse);
+
 			isScoreSubmitting = false;
 
 			if(debugMode)
