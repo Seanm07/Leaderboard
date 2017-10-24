@@ -161,7 +161,74 @@ The nickname is just a name for the player to identifier theirselves and let oth
 
 ---
 
-### Quick references
+### Callbacks
+```c#
+void OnEnable()
+{
+  // Triggered when trying to make a request when there is no internet connection
+  LeaderboardManager.OnSubmitConnectionFailed += SubmitConnectionFailed;
+  LeaderboardManager.OnLeaderboardConnectionFailed += LeaderboardConnectionFailed;
+  LeaderboardManager.OnRankConnectionFailed += RankConnectionFailed;
+  
+  // Triggered when a request is already active
+  // Note: Only 1 submission can be sent at once, everything else allows unlimited but you can only re-request the same leaderboardId when the previous request on that leaderboardId finishes
+  LeaderboardManager.OnSubmitAlreadyPending += SubmitAlreadyPending;
+  LeaderboardManager.OnLeaderbopardAlreadyPending += LeaderboardAlreadyPending;
+  LeaderboardManager.OnRankAlreadyPending += RankAlreadyPending;
+  
+  // Triggered when a request fails, can be missing a parameter, server error or something else
+  LeaderboardManager.OnSubmitRequestFailed += SubmitRequestFailed;
+  LeaderboardManager.OnLeaderboardRequestFailed += LeaderboardRequestFailed;
+  LeaderboardManager.OnRankRequestFailed += RankRequestFailed;
+  
+  // Triggered when a data request finishes
+  LeaderboardManager.OnSubmitDone += SubmitDone;
+  LeaderboardManager.OnLeaderboardDone += LeaderboardDone;
+  LeaderboardManager.OnRankDone += RankDone;
+}
+
+void OnDisbale()
+{
+  LeaderboardManager.OnSubmitConnectionFailed -= SubmitConnectionFailed;
+  LeaderboardManager.OnLeaderboardConnectionFailed -= LeaderboardConnectionFailed;
+  LeaderboardManager.OnRankConnectionFailed -= RankConnectionFailed;
+  
+  LeaderboardManager.OnSubmitAlreadyPending -= SubmitAlreadyPending;
+  LeaderboardManager.OnLeaderbopardAlreadyPending -= LeaderboardAlreadyPending;
+  LeaderboardManager.OnRankAlreadyPending -= RankAlreadyPending;
+  
+  LeaderboardManager.OnSubmitRequestFailed -= SubmitRequestFailed;
+  LeaderboardManager.OnLeaderboardRequestFailed -= LeaderboardRequestFailed;
+  LeaderboardManager.OnRankRequestFailed -= RankRequestFailed;
+  
+  LeaderboardManager.OnSubmitDone -= SubmitDone;
+  LeaderboardManager.OnLeaderboardDone -= LeaderboardDone;
+  LeaderboardManager.OnRankDone -= RankDone;
+}
+
+void SubmitConnectionFailed(string leaderboardId){}
+void LeaderboardConnectionFailed(string leaderboardId){}
+void RankConnectionFailed(string leaderboardId){}
+
+void SubmitAlreadyPending(string leaderboardId){}
+void LeaderboardAlreadyPending(string leaderboardId){}
+void RankAlreadyPending(string leaderboardId){}
+
+void SubmitRequestFailed(string leaderboardId, string errorMessage){}
+void LeaderboardRequestFailed(string leaderboardId, string errorMessage){}
+void RankRequestFailed(string leaderboardId, string errorMessage){}
+
+void SubmitDone(string leaderboardId){}
+void LeaderboardDone(string leaderboardId, LeaderboardResponse leaderboardData){}
+void RankDone(string leaderboardId, RankResponse rankData){}
+```
+I've listed all callbacks being used here as an example, only link up which callbacks you actually need. (You may actually need them all too, that's fine)
+
+Also it's useful to know that the callbacks from OnLeaderboardDone and OnRankDone also include the LeaderboardResponse and RankResponse data, so you don't need to manually go and call GetLeaderboardData(..) within these functions!
+
+---
+
+## Quick references
 ```c#
 LeaderboardManager.IsLeaderboardReady(string leaderboardId);
 LeaderboardManager.IsLeaderboardError(string leaderboardId);
