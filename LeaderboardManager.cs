@@ -86,10 +86,8 @@ public class LeaderboardManager : MonoBehaviour {
 	public static Action<string, LeaderboardResponse> OnLeaderboardDone;
 	public static Action<string, RankResponse> OnRankDone;
 
-	#if UNITY_5_6_OR_NEWER
-		private string packageName = Application.identifier;
-	#elif UNITY_5_3_OR_NEWER
-		private string packageName = Application.bundleIdentifier;
+	#if UNITY_5_3_OR_NEWER
+		private string packageName;
 	#else
 		// Older versions of Unity didn't have a way to get the bundle name via script..
 		public string packageName = "com.pickle.CHANGE_THIS";
@@ -97,6 +95,12 @@ public class LeaderboardManager : MonoBehaviour {
 
 	void Awake()
 	{
+		#if UNITY_5_6_OR_NEWER
+			packageName = Application.identifier;
+		#elif UNITY_5_3_OR_NEWER
+			packageName = Application.bundleIdentifier;
+		#endif
+
 		// Setup a static reference to we can reference non-static script members from static methods
 		selfRef = (selfRef == null ? this : selfRef);
 	}
