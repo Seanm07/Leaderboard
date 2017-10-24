@@ -24,6 +24,8 @@ if(LeaderboardManager.IsLeaderboardReady("Mode_1_Mission_4_AllTime")){
 ```
 Returns a bool stating whether the requested leaderboard with the input id is ready. (Note that leaderboards are set as not ready when re-requesting their data. They'll be ready again once the request is complete)
 
+---
+
 ### Check if a leaderboard had an error
 ```c#
 if(LeaderboardManager.IsLeaderboardError("Mode_1_Mission_4_AllTime")){
@@ -31,6 +33,8 @@ if(LeaderboardManager.IsLeaderboardError("Mode_1_Mission_4_AllTime")){
 }
 ```
 Returns a bool stating whether the requested leaderboard with the input id had an error. (Set to false as soon as you re-request a new leaderboard. It'll be true again as soon as the request encounters an error - this and being ready can not be true at the same time)
+
+---
 
 ### Check if a leaderboard request is active
 ```c#
@@ -40,6 +44,8 @@ if(LeaderboardManager.IsLeaderboardActive("Mode_1_Mission_4_AllTime")){
 ```
 Returns a bool stating whether the request is still processing
 
+---
+
 ### Check if leaderboard data is currently being submitted
 ```c#
 if(LeaderboardManager.IsSubmitActive()){
@@ -47,6 +53,8 @@ if(LeaderboardManager.IsSubmitActive()){
 }
 ```
 Returns a bool of whether a leaderboard submission is currently active. (Only 1 leaderboard submission can be active at once so be patient with requests!)
+
+---
 
 ### Check if rank data is ready
 ```c#
@@ -56,6 +64,8 @@ if(LeaderboardManager.IsRankReady("Mode_1_Mission_4_AllTime")){
 ```
 Returns a bool stating whether the requested rank data is ready (Set to false as soon as you re-request the rank data again. It'll be true again as soon as the request is complete)
 
+---
+
 ### Check if rank data had an error
 ```c#
 if(LeaderboardManager.IsRankError("Mode_1_Mission_4_AllTime")){
@@ -64,6 +74,8 @@ if(LeaderboardManager.IsRankError("Mode_1_Mission_4_AllTime")){
 ```
 Returns a bool stating whether the requested rank data with the input id has an erro (Set to false as soon as the re-request the rank data again)
 
+---
+
 ### Check if rank request is still active
 ```c#
 if(LeaderboardManager.IsRankActive("Mode_1_Mission_4_AllTime")){
@@ -71,6 +83,8 @@ if(LeaderboardManager.IsRankActive("Mode_1_Mission_4_AllTime")){
 }
 ```
 Returns a bool stating whether the requested rank data is still processing
+
+---
 
 ### Get a leaderboard once it is ready (the ready callback also includes this data as a parameter)
 ```c#
@@ -88,6 +102,8 @@ Get a leaderboard by id once the request for it has completed.
 Calling this function when the leaderboard hasn't been requested yet will return null
 Calling this function when the leaderboard has been requested but isn't ready will either contain data from a previous leaderboard request or the data of a blank leaderboard
 
+---
+
 ### Get a leaderboard rank once it is ready (the ready callback also includes this data as a parameter)
 ```c#
 RankResponse activeRank = LeaderboardManager.GetRank("Mode_1_Mission_4_AllTime");
@@ -98,23 +114,28 @@ This rank is used to show what rank the player would be placed into the leaderbo
 Calling this function when the rank hasn't been requested yet will return null
 Calling this function when the rank has been requested but isn't ready yet will either contain data from a previous rank request or the data will be blank (empty string rank)
 
+---
+
 ### Send a request to get leaderboard data
 ```c#
 
 ```
 
+---
 
 ### Send a request to get rank data
 ```c#
 
 ```
 
+---
 
 ### Send a request to add a score to the leaderboard
 ```c#
 
 ```
 
+---
 
 ### Quick references
 LeaderboardManager.IsLeaderboardReady(string leaderboardId)
