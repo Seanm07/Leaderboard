@@ -187,7 +187,7 @@ void OnEnable()
   LeaderboardManager.OnRankDone += RankDone;
 }
 
-void OnDisbale()
+void OnDisable()
 {
   LeaderboardManager.OnSubmitConnectionFailed -= SubmitConnectionFailed;
   LeaderboardManager.OnLeaderboardConnectionFailed -= LeaderboardConnectionFailed;
