@@ -17,7 +17,7 @@ Wrote this as fast as possible so if there's any important information missing j
 **Set 'today' and 'all time' rank labels on a level complete screen**
 This is a script extracted from a working game to be used as reference. Don't just put it directly into your project and expect it to work as there's calls to other scripts you won't have!
 
-https://pastebin.com/TJEchiW4
+https://pastebin.com/qFhFwWCL
 
 ---
 
