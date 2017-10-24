@@ -2,6 +2,8 @@
 Compatible and tested with Unity 4, Unity 5 and Unity 2017.
 It works by sending GET requests to our server which runs mysql queries which are cached with memcaching and flushed upon submitting new scores.
 
+Wrote this as fast as possible so if there's any important information missing just ask us and we can help directly or add additional information to this readme.
+
 ## Setup
 - Import LeaderboardManager.cs
 - Attach it to a gameobject which will never be destroyed
@@ -155,7 +157,7 @@ Submits a score into the leaderboard, note that a device id is required for this
 
 The clientID must be unique to the player, if your game has permissions to grab the player email then go ahead and use that if you want to allow leaderboard submission per user rather than per device. But for most uses the clientID we generate in the GoogleAnalytics script is good enough for this.
 
-The nickname is just a name for the player to identifier theirselves and let others see, it's important to note that 
+The nickname is just a name for the player to identifier theirselves and let others see. The nickname is compared against a filter list when being submitted to the server and any bad words are converted to special chars randomly.
 
 ---
 
