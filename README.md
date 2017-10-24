@@ -7,6 +7,9 @@ Wrote this as fast as possible so if there's any important information missing j
 ## Setup
 - Import LeaderboardManager.cs
 - Attach it to a gameobject which will never be destroyed
+- Read everything below the scripting header
+- ???
+- Profit
 
 ## Inspector Variables
 **Results Per Page**
