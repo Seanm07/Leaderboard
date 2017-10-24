@@ -11,6 +11,16 @@ Wrote this as fast as possible so if there's any important information missing j
 - ???
 - Profit
 
+---
+
+## Example Scripts
+**Set 'today' and 'all time' rank labels on a level complete screen**
+This is a script extracted from a working game to be used as reference. Don't just put it directly into your project and expect it to work as there's calls to other scripts you won't have!
+
+https://pastebin.com/TJEchiW4
+
+---
+
 ## Inspector Variables
 **Results Per Page**
 Controls how many leaderboard rows will be contained in a single leaderboard request. Serverside caching relies on this variable so it should not be changed at runtime!
@@ -20,6 +30,8 @@ This will log messages to the console when callbacks are triggered as well as lo
 
 **Treat No Results As Error**
 Tick this to make 'no results' trigger an error response rather than a successful one. It might be useful if you want to display a message about no leaderboard scores rather than showing a blank leaderboard. (although you can still do both with either option, it just depends how you want to structure your code)
+
+---
 
 ## Scripting
 ### Check if a leaderboard is ready
