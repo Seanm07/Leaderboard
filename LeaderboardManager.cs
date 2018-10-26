@@ -64,7 +64,7 @@ public class LeaderboardManager : MonoBehaviour {
 	private bool isScoreSubmitting = false;
 	
 	// Time periods for grabbing leaderboards (To add more time periods this also needs to be changed serverside as for caching purposes it's very strict)
-	public enum TimePeriod { AllTime, Today }
+	public enum TimePeriod { AllTime, PastWeek, Today }
 
 	// Connection failed callback events (called when there's no internet connection)
 	public static Action<string> OnSubmitConnectionFailed;
@@ -274,7 +274,7 @@ public class LeaderboardManager : MonoBehaviour {
 		// Mark the rank as active (being processed)
 		rankStorage[leaderboardId].isActive = true;
 
-		string requestURL = "http://data.i6.com/datastore.php?";
+		string requestURL = "https://data.i6.com/datastore.php?";
 
 		// The queryString variable is setup to match the PHP $_SERVER['QUERY_STRING'] variable
 		string queryString = "action=get_leaderboard_rank";
@@ -375,7 +375,7 @@ public class LeaderboardManager : MonoBehaviour {
 		// Mark the rank as active (being processed)
 		leaderboardStorage[leaderboardId].isActive = true;
 
-		string requestURL = "http://data.i6.com/datastore.php?";
+		string requestURL = "https://data.i6.com/datastore.php?";
 
 		// The queryString variable is setup to match the PHP $_SERVER['QUERY_STRING'] variable
 		string queryString = "action=get_leaderboard";
@@ -490,7 +490,7 @@ public class LeaderboardManager : MonoBehaviour {
 	{
 		isScoreSubmitting = true;
 
-		string requestURL = "http://data.i6.com/datastore.php?";
+		string requestURL = "https://data.i6.com/datastore.php?";
 
 		// The queryString variable is setup to match the PHP $_SERVER['QUERY_STRING'] variable
 		string queryString = "action=set_leaderboard";
