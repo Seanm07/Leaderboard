@@ -333,7 +333,7 @@ public class LeaderboardManager : MonoBehaviour {
 		}
 
 		try {
-			#if UNITY_5 || UNITY_2017
+			#if UNITY_5 || UNITY_2017_1_OR_NEWER
 				rankStorage[leaderboardId] = JsonUtility.FromJson<RankResponse>(leaderboardRankRequest.text);
 			#else
 				JSONNode jsonData = JSON.Parse(leaderboardRankRequest.text);
