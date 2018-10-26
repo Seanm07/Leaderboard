@@ -283,13 +283,13 @@ public class LeaderboardManager : MonoBehaviour {
 		queryString += "&leaderboard=" + leaderboardId;
 		queryString += "&score=" + score;
 		queryString += "&time=" + timePeriod;
-		queryString += "&token=" + WWW.EscapeURL(GetSecurityToken());
+		queryString += "&token=" + WWW.EscapeURL(GetSecurityToken(), Encoding.UTF8);
 		queryString += deviceId != string.Empty ? "&device=" + deviceId : "";
 
 		requestURL += queryString;
 
 		// The checksum allows us to validate that the requested URL matches the URL sent to the server
-		requestURL += "&checksum=" + WWW.EscapeURL(GenerateChecksum(queryString));
+		requestURL += "&checksum=" + WWW.EscapeURL(GenerateChecksum(queryString), Encoding.UTF8);
 
 		if(debugMode)
 			Debug.Log("[DEBUG] Send request to: " + requestURL);
@@ -385,13 +385,13 @@ public class LeaderboardManager : MonoBehaviour {
 		queryString += "&time=" + timePeriod;
 		queryString += "&page=" + pageNum;
 		queryString += "&perpage=" + resultsPerPage;
-		queryString += "&token=" + WWW.EscapeURL(GetSecurityToken());
+		queryString += "&token=" + WWW.EscapeURL(GetSecurityToken(), Encoding.UTF8);
 		queryString += deviceId != string.Empty ? "&device=" + deviceId : "";
 
 		requestURL += queryString;
 
 		// The checksum allows us to validate that the requested URL matches the URL sent to the server
-		requestURL += "&checksum=" + WWW.EscapeURL(GenerateChecksum(queryString));
+		requestURL += "&checksum=" + WWW.EscapeURL(GenerateChecksum(queryString), Encoding.UTF8);
 
 		if(debugMode)
 			Debug.Log("[DEBUG] Send request to: " + requestURL);
@@ -501,12 +501,12 @@ public class LeaderboardManager : MonoBehaviour {
 		queryString += "&nickname=" + nickname;
 		queryString += "&score=" + score;
 		queryString += "&perpage=" + resultsPerPage;
-		queryString += "&token=" + WWW.EscapeURL(GetSecurityToken());
+		queryString += "&token=" + WWW.EscapeURL(GetSecurityToken(), Encoding.UTF8);
 
 		requestURL += queryString;
 
 		// The checksum allows us to validate that the requested URL matches the URL sent to the server
-		requestURL += "&checksum=" + WWW.EscapeURL(GenerateChecksum(queryString));
+		requestURL += "&checksum=" + WWW.EscapeURL(GenerateChecksum(queryString), Encoding.UTF8);
 
 		if(debugMode)
 			Debug.Log("[DEBUG] Send request to: " + requestURL);
