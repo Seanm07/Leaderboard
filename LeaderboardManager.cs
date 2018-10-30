@@ -1,4 +1,4 @@
-﻿using System.Collections;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using System;
@@ -64,7 +64,7 @@ public class LeaderboardManager : MonoBehaviour {
 	private bool isScoreSubmitting = false;
 	
 	// Time periods for grabbing leaderboards (To add more time periods this also needs to be changed serverside as for caching purposes it's very strict)
-	public enum TimePeriod { AllTime, PastWeek, Today }
+	public enum TimePeriod { AllTime, PastMonth, PastWeek, Today }
 
 	// Connection failed callback events (called when there's no internet connection)
 	public static Action<string> OnSubmitConnectionFailed;
