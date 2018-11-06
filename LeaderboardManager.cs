@@ -1,4 +1,4 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using System;
@@ -245,6 +245,30 @@ public class LeaderboardManager : MonoBehaviour {
 		}
 	}
 
+	// Submit a change in score
+	public static void AdjustLeaderboardData(string leaderboardId, string deviceId, string nickname, int scoreChange)
+	{
+		if(!IsSubmitActive()){
+			// Don't even bother starting the routine if we don't have a working internet connection
+			if(Application.internetReachability != NetworkReachability.NotReachable){
+				// Start the leaderboard routine, this will send a server request to submit the score
+				selfRef.StartCoroutine(selfRef.DoAdjustLeaderboardData(leaderboardId, deviceId, nickname, scoreChange));
+			} else {
+				if(selfRef.debugMode)
+					Debug.Log("[DEBUG] Failed to adjust " + leaderboardId + "! No internet connection");
+
+				if(OnSubmitConnectionFailed != null)
+					OnSubmitConnectionFailed.Invoke(leaderboardId);
+			}
+		} else {
+			if(selfRef.debugMode)
+				Debug.Log("[DEBUG] Failed to adjust " + leaderboardId + " as another submit was still active");
+
+			if(OnSubmitAlreadyPending != null)
+				OnSubmitAlreadyPending.Invoke(leaderboardId);
+		}
+	}
+
 	// Submit a score to the requested leaderboard
 	public static void SetLeaderboardData(string leaderboardId, string deviceId, string nickname, int score)
 	{
@@ -485,6 +509,80 @@ public class LeaderboardManager : MonoBehaviour {
 			OnLeaderboardDone.Invoke(leaderboardId, leaderboardStorage[leaderboardId]);
 	}
 
+	private IEnumerator DoAdjustLeaderboardData(string leaderboardId, string deviceId, string nickname, int scoreAdjust)
+	{
+		isScoreSubmitting = true;
+
+		string requestURL = "https://data.i6.com/datastore.php?";
+
+		// The queryString variable is setup to match the PHP $_SERVER['QUERY_STRING'] variable
+		string queryString = "action=adjust_leaderboard";
+		queryString += "&platform=" + Application.platform.ToString();
+		queryString += "&package_name=" + packageName;
+		queryString += "&leaderboard=" + leaderboardId;
+		queryString += "&device=" + deviceId;
+		queryString += "&nickname=" + WWW.EscapeURL(nickname, Encoding.UTF8);
+		queryString += "&score=" + scoreAdjust;
+		queryString += "&perpage=" + resultsPerPage;
+		queryString += "&token=" + WWW.EscapeURL(GetSecurityToken(), Encoding.UTF8);
+
+		requestURL += queryString;
+
+		// The checksum allows us to validate that the requested URL matches the URL sent to the server
+		requestURL += "&checksum=" + WWW.EscapeURL(GenerateChecksum(queryString), Encoding.UTF8);
+
+		if(debugMode)
+			Debug.Log("[DEBUG] Send request to: " + requestURL);
+
+		// Send the request to add this data to the leaderboard
+		WWW leaderboardRequest = new WWW(requestURL);
+
+		while(!leaderboardRequest.isDone)
+			yield return null;
+
+		if(!string.IsNullOrEmpty(leaderboardRequest.error)){
+			GoogleAnalytics.Instance.LogError("Failed to adjust leaderboard! " + leaderboardRequest.error);
+
+			isScoreSubmitting = false;
+
+			if(debugMode)
+				Debug.Log("[DEBUG] Adjust failed for " + leaderboardId + " error: " + leaderboardRequest.error);
+
+			if(OnSubmitRequestFailed != null)
+				OnSubmitRequestFailed.Invoke(leaderboardId, leaderboardRequest.error);
+
+			yield break;
+		}
+
+		string errorResponse;
+
+		if(IsErrorResponse(leaderboardId, leaderboardRequest.text, out errorResponse)){
+			GoogleAnalytics.Instance.LogError("Failed to adjust leaderboard! " + errorResponse);
+
+			isScoreSubmitting = false;
+
+			if(debugMode)
+				Debug.Log("[DEBUG] Adjust failed for " + leaderboardId + " error: " + errorResponse);
+
+			if(OnSubmitRequestFailed != null)
+				OnSubmitRequestFailed.Invoke(leaderboardId, errorResponse);
+
+			yield break;
+		}
+
+		// Cleanup the WWW request data
+		leaderboardRequest.Dispose();
+
+		isScoreSubmitting = false;
+
+		if(debugMode)
+			Debug.Log("[DEBUG] Adjust complete for " + leaderboardId + " with score " + score);
+
+		// Trigger the OnLeaderboardSubmitComplete action
+		if(OnSubmitDone != null)
+			OnSubmitDone.Invoke(leaderboardId);
+	}
+
 	// Setting the leaderboard doesn't touch the Leaderboards[..] data just incase we're reading at the same time as submitting
 	private IEnumerator DoSetLeaderboardData(string leaderboardId, string deviceId, string nickname, int score)
 	{
@@ -498,7 +596,7 @@ public class LeaderboardManager : MonoBehaviour {
 		queryString += "&package_name=" + packageName;
 		queryString += "&leaderboard=" + leaderboardId;
 		queryString += "&device=" + deviceId;
-		queryString += "&nickname=" + nickname;
+		queryString += "&nickname=" + WWW.EscapeURL(nickname, Encoding.UTF8);
 		queryString += "&score=" + score;
 		queryString += "&perpage=" + resultsPerPage;
 		queryString += "&token=" + WWW.EscapeURL(GetSecurityToken(), Encoding.UTF8);
@@ -619,6 +717,25 @@ public class LeaderboardManager : MonoBehaviour {
 			Token.Insert(i, Glpyhs[UnityEngine.Random.Range(0, Glpyhs.Length-1)]);
 
 		return Token.ToString();
+	}
+
+	public List<string> namePart1 = new List<string>();
+	public List<string> namePart2 = new List<string>();
+	public List<string> namePart3 = new List<string>();
+
+	public string GenerateRandomName()
+	{
+		#if UNITY_5_4_OR_NEWER
+			UnityEngine.Random.InitState((int)DateTime.Now.Ticks);
+		#else
+			UnityEngine.Random.seed = (int)DateTime.Now.Ticks;
+		#endif
+
+		string outputName = namePart1[UnityEngine.Random.Range(0, namePart1.Count)];
+		outputName += " " + namePart2[UnityEngine.Random.Range(0, namePart2.Count)];
+		outputName += " " + namePart3[UnityEngine.Random.Range(0, namePart3.Count)];
+
+		return outputName;
 	}
 
 	private string GenerateChecksum(string input)
