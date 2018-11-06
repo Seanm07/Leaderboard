@@ -576,7 +576,7 @@ public class LeaderboardManager : MonoBehaviour {
 		isScoreSubmitting = false;
 
 		if(debugMode)
-			Debug.Log("[DEBUG] Adjust complete for " + leaderboardId + " with score " + score);
+			Debug.Log("[DEBUG] Adjust complete for " + leaderboardId + " with score " + scoreAdjust);
 
 		// Trigger the OnLeaderboardSubmitComplete action
 		if(OnSubmitDone != null)
