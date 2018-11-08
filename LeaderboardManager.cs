@@ -16,6 +16,14 @@ public class LeaderboardStorage {
 	public string nickname;
 	public int score;
 	public long timestamp;
+
+	public LeaderboardStorage(string inDeviceIdentifier, string inNickname, int inScore, long inTimestamp)
+	{
+		device_identifier = inDeviceIdentifier;
+		nickname = inNickname;
+		score = inScore;
+		timestamp = inTimestamp;
+	}
 }
 
 [Serializable]
@@ -47,6 +55,9 @@ public class LeaderboardManager : MonoBehaviour {
 	// Leaderboard dictionary (the keys are the leaderboard identifiers)
 	private Dictionary<string, LeaderboardResponse> leaderboardStorage = new Dictionary<string, LeaderboardResponse>();
 
+	// Leaderboard submission dictionary (to keep track of which leaderboards are currently being submitted)
+	private Dictionary<string, bool> leaderboardSubmissions = new Dictionary<string, bool>();
+
 	// Rank dictionary (the keys are the leaderboard identifiers)
 	private Dictionary<string, RankResponse> rankStorage = new Dictionary<string, RankResponse>();
 
@@ -60,9 +71,6 @@ public class LeaderboardManager : MonoBehaviour {
 	// Can be useful if you want to show a message instead of an empty leaderboard
 	public bool treatNoResultsAsError = false;
 
-	// Only allow one score submission request at once
-	private bool isScoreSubmitting = false;
-	
 	// Time periods for grabbing leaderboards (To add more time periods this also needs to be changed serverside as for caching purposes it's very strict)
 	public enum TimePeriod { AllTime, PastMonth, PastWeek, Today }
 
@@ -127,9 +135,9 @@ public class LeaderboardManager : MonoBehaviour {
 	}
 
 	// Returns true if a submit request is still processing
-	public static bool IsSubmitActive()
+	public static bool IsSubmitActive(string leaderboardId)
 	{
-		return selfRef.isScoreSubmitting;
+		return selfRef.leaderboardSubmissions.ContainsKey (leaderboardId) && selfRef.leaderboardSubmissions [leaderboardId];
 	}
 
 	// Returns true if the last request made to this leaderboardId for the rank had finished
@@ -155,60 +163,64 @@ public class LeaderboardManager : MonoBehaviour {
 
 	// Gets a leaderboard by the leaderboardId (returns null if there's no leaderboard data ready, or returns a blank LeaderboardResponse if the request hasn't finished yet)
 	// Check with IsLeaderboardReady(..) first if you want to know the status, or wait for the callback
-	public static LeaderboardResponse GetLeaderboard(string leaderboardId)
+	public static LeaderboardResponse GetLeaderboard(string leaderboardId, string deviceId = "", TimePeriod timePeriod = TimePeriod.AllTime, int pageNum = 0)
 	{
-		return selfRef.leaderboardStorage.ContainsKey(leaderboardId) ? selfRef.leaderboardStorage[leaderboardId] : null;
+		string leaderboardStorageRefId = leaderboardId + deviceId + timePeriod + pageNum;
+
+		return selfRef.leaderboardStorage.ContainsKey(leaderboardStorageRefId) ? selfRef.leaderboardStorage[leaderboardStorageRefId] : null;
 	}
 
 	// Gets a leaderboard rank by the leaderboard identifier (returns null if there's no leaderboard rank ready, or returns a blank RankResponse if the request is hasn't finished yet)
 	// Check with IsRankReady(..) first if you want to know the status, or wait for the callback
-	public static RankResponse GetRank(string leaderboardId)
+	public static RankResponse GetRank(string leaderboardId, TimePeriod timePeriod = TimePeriod.AllTime, string deviceId = "")
 	{
-		return selfRef.rankStorage.ContainsKey(leaderboardId) ? selfRef.rankStorage[leaderboardId] : null;
+		string leaderboardRankStorageRefId = leaderboardId + timePeriod + deviceId;
+
+		return selfRef.rankStorage.ContainsKey(leaderboardRankStorageRefId) ? selfRef.rankStorage[leaderboardRankStorageRefId] : null;
 	}
 
-	private void SetupRanksKey(string leaderboardId)
+	private void SetupRanksKey(string leaderboardRankStorageRefId)
 	{
 		// Add a rank key if one doesn't exist in the dictionary
-		if(!selfRef.rankStorage.ContainsKey(leaderboardId))
-			selfRef.rankStorage.Add(leaderboardId, new RankResponse());
+		if(!selfRef.rankStorage.ContainsKey(leaderboardRankStorageRefId)){
+			selfRef.rankStorage.Add(leaderboardRankStorageRefId, new RankResponse());
 
-		// Reset the ready and error status
-		selfRef.rankStorage[leaderboardId].isReady = false;
-		selfRef.rankStorage[leaderboardId].isError = false;
-		selfRef.rankStorage[leaderboardId].isActive = false;
+			// Reset the ready and error status
+			selfRef.rankStorage[leaderboardRankStorageRefId].isReady = false;
+			selfRef.rankStorage[leaderboardRankStorageRefId].isError = false;
+			selfRef.rankStorage[leaderboardRankStorageRefId].isActive = false;
+		}
 	}
 
-	private void SetupLeaderboardsKey(string leaderboardId)
+	private void SetupLeaderboardsKey(string leaderboardStorageRefId)
 	{
 		// Add a leaderboard key if one doesn't exist in the dictionary
-		if(!selfRef.leaderboardStorage.ContainsKey(leaderboardId))
-			selfRef.leaderboardStorage.Add(leaderboardId, new LeaderboardResponse());
+		if(!selfRef.leaderboardStorage.ContainsKey(leaderboardStorageRefId)){
+			selfRef.leaderboardStorage.Add(leaderboardStorageRefId, new LeaderboardResponse());
 
-		// Reset the ready and error status
-		selfRef.leaderboardStorage[leaderboardId].isReady = false;
-		selfRef.leaderboardStorage[leaderboardId].isError = false;
-		selfRef.leaderboardStorage[leaderboardId].isActive = false;
+			// Reset the ready and error status
+			selfRef.leaderboardStorage[leaderboardStorageRefId].isReady = false;
+			selfRef.leaderboardStorage[leaderboardStorageRefId].isError = false;
+			selfRef.leaderboardStorage[leaderboardStorageRefId].isActive = false;
+		}
+	}
+
+	private void SetupSubmissionKey(string leaderboardId)
+	{
+		// Add a leaderboard submission key if one doesn't exist in the dictionary
+		if(!selfRef.leaderboardSubmissions.ContainsKey(leaderboardId))
+			selfRef.leaderboardSubmissions.Add(leaderboardId, false);
 	}
 
 	// Send a request for the leaderboard submissions within the requested leaderboard (only from this device if DeviceId is defined)
-	public static void GetLeaderboardData(string leaderboardId, string deviceId = "", TimePeriod timePeriod = TimePeriod.AllTime, int pageNum = 0)
+	public static void GetLeaderboardData(string leaderboardId, string deviceId = "", TimePeriod timePeriod = TimePeriod.AllTime, int pageNum = 0, bool forceRefresh = false)
 	{
 		if(!IsLeaderboardActive(leaderboardId)){
-			// Mark the leaderboard as not ready (it may still contain data but isReady is false when the last GetLeaderboardData request has not completed yet) (and may never will due to errors)
-			selfRef.SetupLeaderboardsKey(leaderboardId);
+			// Create the leaderboard key in the dictionary if it doesn't exist
+			selfRef.SetupLeaderboardsKey(leaderboardId + deviceId + timePeriod + pageNum);
 
-			// Don't even bother starting the routine if we don't have a working internet connection
-			if(Application.internetReachability != NetworkReachability.NotReachable){
-				// Start the leaderboard routine, this will send a server request for the wanted data
-				selfRef.StartCoroutine(selfRef.DoGetLeaderboardData(leaderboardId, deviceId, timePeriod, pageNum));
-			} else {
-				if(selfRef.debugMode)
-					Debug.Log("[DEBUG] Failed to get leaderboard for " + leaderboardId + "! No internet connection");
-
-				if(OnLeaderboardConnectionFailed != null)
-					OnLeaderboardConnectionFailed.Invoke(leaderboardId);
-			}
+			// Start the leaderboard routine, if the leaderboard isn't already cached or this is a force refresh request this will send a server request for the wanted data
+			selfRef.StartCoroutine(selfRef.DoGetLeaderboardData(leaderboardId, deviceId, timePeriod, pageNum, forceRefresh));
 		} else {
 			if(selfRef.debugMode)
 				Debug.Log("[DEBUG] Get leaderboard for " + leaderboardId + " was already active");
@@ -219,23 +231,14 @@ public class LeaderboardManager : MonoBehaviour {
 	}
 
 	// Send a request for what rank a score would be in the leaderboard
-	public static void GetLeaderboardRankData(string leaderboardId, int score, TimePeriod timePeriod = TimePeriod.AllTime, string deviceId = "")
+	public static void GetLeaderboardRankData(string leaderboardId, int score, TimePeriod timePeriod = TimePeriod.AllTime, string deviceId = "", bool forceRefresh = false)
 	{
 		if(!IsRankActive(leaderboardId)){
-			// Mark the leaderboard as not ready (it may still contain data but isReady is false when the last GetLeaderboardData request has not completed yet) (and may never will due to errors)
-			selfRef.SetupRanksKey(leaderboardId);
+			// Create the leaderboard rank key in the dictionary if it doesn't exist
+			selfRef.SetupRanksKey(leaderboardId + timePeriod + deviceId);
 
-			// Don't even bother starting the routine if we don't have a working internet connection
-			if(Application.internetReachability != NetworkReachability.NotReachable){
-				// Start the leaderboard routine, this will send a server request for the rank a score has in the leaderboard
-				selfRef.StartCoroutine(selfRef.DoGetLeaderboardRankData(leaderboardId, score, timePeriod, deviceId));
-			} else {
-				if(selfRef.debugMode)
-					Debug.Log("[DEBUG] Failed to get rank for " + leaderboardId + "! No internet connection");
-
-				if(OnRankConnectionFailed != null)
-					OnRankConnectionFailed.Invoke(leaderboardId);
-			}
+			// Start the leaderboard routine, this will send a server request for the rank a score has in the leaderboard
+			selfRef.StartCoroutine(selfRef.DoGetLeaderboardRankData(leaderboardId, score, timePeriod, deviceId, forceRefresh));
 		} else {
 			if(selfRef.debugMode)
 				Debug.Log("[DEBUG] Get rank for " + leaderboardId + " was already active");
@@ -248,7 +251,10 @@ public class LeaderboardManager : MonoBehaviour {
 	// Submit a change in score
 	public static void AdjustLeaderboardData(string leaderboardId, string deviceId, string nickname, int scoreChange)
 	{
-		if(!IsSubmitActive()){
+		if(!IsSubmitActive(leaderboardId)){
+			// Create the leaderboard submission key in the dictionary if it doesn't exist
+			selfRef.SetupSubmissionKey(leaderboardId);
+
 			// Don't even bother starting the routine if we don't have a working internet connection
 			if(Application.internetReachability != NetworkReachability.NotReachable){
 				// Start the leaderboard routine, this will send a server request to submit the score
@@ -272,7 +278,10 @@ public class LeaderboardManager : MonoBehaviour {
 	// Submit a score to the requested leaderboard
 	public static void SetLeaderboardData(string leaderboardId, string deviceId, string nickname, int score)
 	{
-		if(!IsSubmitActive()){
+		if(!IsSubmitActive(leaderboardId)){
+			// Create the leaderboard submission key in the dictionary if it doesn't exist
+			selfRef.SetupSubmissionKey(leaderboardId);
+
 			// Don't even bother starting the routine if we don't have a working internet connection
 			if(Application.internetReachability != NetworkReachability.NotReachable){
 				// Start the leaderboard routine, this will send a server request to submit the score
@@ -293,225 +302,270 @@ public class LeaderboardManager : MonoBehaviour {
 		}
 	}
 
-	private IEnumerator DoGetLeaderboardRankData(string leaderboardId, int score, TimePeriod timePeriod = TimePeriod.AllTime, string deviceId = "")
+	private IEnumerator DoGetLeaderboardRankData(string leaderboardId, int score, TimePeriod timePeriod = TimePeriod.AllTime, string deviceId = "", bool forceRefresh = false)
 	{
-		// Mark the rank as active (being processed)
-		rankStorage[leaderboardId].isActive = true;
+		string leaderboardRankStorageRefId = leaderboardId + timePeriod + deviceId;
 
-		string requestURL = "https://data.i6.com/datastore.php?";
+		// Only re-download the leaderboard if it's not already ready and this isn't a force refresh request (otherwise we'll use the cached version)
+		if(!rankStorage[leaderboardRankStorageRefId].isReady || forceRefresh){
+			// Immediately check if we have an internet connection and exit early if not
+			if(Application.internetReachability == NetworkReachability.NotReachable){
+				if(selfRef.debugMode)
+					Debug.Log("[DEBUG] Failed to get rank for " + leaderboardId + "! No internet connection");
 
-		// The queryString variable is setup to match the PHP $_SERVER['QUERY_STRING'] variable
-		string queryString = "action=get_leaderboard_rank";
-		queryString += "&platform=" + Application.platform.ToString();
-		queryString += "&package_name=" + packageName;
-		queryString += "&leaderboard=" + leaderboardId;
-		queryString += "&score=" + score;
-		queryString += "&time=" + timePeriod;
-		queryString += "&token=" + WWW.EscapeURL(GetSecurityToken(), Encoding.UTF8);
-		queryString += deviceId != string.Empty ? "&device=" + deviceId : "";
+				if(OnRankConnectionFailed != null)
+					OnRankConnectionFailed.Invoke(leaderboardId);
 
-		requestURL += queryString;
+				yield break;
+			}
 
-		// The checksum allows us to validate that the requested URL matches the URL sent to the server
-		requestURL += "&checksum=" + WWW.EscapeURL(GenerateChecksum(queryString), Encoding.UTF8);
+			// Mark the rank as active (being processed)
+			rankStorage[leaderboardRankStorageRefId].isActive = true;
 
-		if(debugMode)
-			Debug.Log("[DEBUG] Send request to: " + requestURL);
+			string requestURL = "https://data.i6.com/datastore.php?";
 
-		// Request the leaderboard rank data from the server
-		WWW leaderboardRankRequest = new WWW(requestURL);
+			// The queryString variable is setup to match the PHP $_SERVER['QUERY_STRING'] variable
+			string queryString = "action=get_leaderboard_rank";
+			queryString += "&platform=" + Application.platform.ToString();
+			queryString += "&package_name=" + packageName;
+			queryString += "&leaderboard=" + leaderboardId;
+			queryString += "&score=" + score;
+			queryString += "&time=" + timePeriod;
+			queryString += "&token=" + WWW.EscapeURL(GetSecurityToken(), Encoding.UTF8);
+			queryString += deviceId != string.Empty ? "&device=" + deviceId : "";
 
-		while(!leaderboardRankRequest.isDone)
-			yield return null;
+			requestURL += queryString;
 
-		if(!string.IsNullOrEmpty(leaderboardRankRequest.error)){
-			GoogleAnalytics.Instance.LogError("Failed to get leaderboard rank data! " + leaderboardRankRequest.error);
-
-			rankStorage[leaderboardId].isError = true;
-			rankStorage[leaderboardId].isActive = false;
-
-			if(debugMode)
-				Debug.Log("[DEBUG] Rank failed for " + leaderboardId + " error: " + leaderboardRankRequest.error);
-
-			if(OnRankRequestFailed != null)
-				OnRankRequestFailed.Invoke(leaderboardId, leaderboardRankRequest.error);
-
-			yield break;
-		}
-
-		string errorResponse;
-
-		if(IsErrorResponse(leaderboardId, leaderboardRankRequest.text, out errorResponse)){
-			GoogleAnalytics.Instance.LogError("Failed to get leaderboard rank data! " + errorResponse);
-
-			rankStorage[leaderboardId].isError = true;
-			rankStorage[leaderboardId].isActive = false;
+			// The checksum allows us to validate that the requested URL matches the URL sent to the server
+			requestURL += "&checksum=" + WWW.EscapeURL(GenerateChecksum(queryString), Encoding.UTF8);
 
 			if(debugMode)
-				Debug.Log("[DEBUG] Rank failed for " + leaderboardId + " error: " + errorResponse);
+				Debug.Log("[DEBUG] Send request to: " + requestURL);
 
-			if(OnRankRequestFailed != null)
-				OnRankRequestFailed.Invoke(leaderboardId, errorResponse);
+			// Request the leaderboard rank data from the server
+			WWW leaderboardRankRequest = new WWW(requestURL);
 
-			yield break;
-		}
+			while(!leaderboardRankRequest.isDone)
+				yield return null;
 
-		try {
-			#if UNITY_5 || UNITY_2017_1_OR_NEWER
-				rankStorage[leaderboardId] = JsonUtility.FromJson<RankResponse>(leaderboardRankRequest.text);
-			#else
-				JSONNode jsonData = JSON.Parse(leaderboardRankRequest.text);
-				rankStorage[leaderboardId].response = jsonData["response"].ToString();
-			#endif
+			if(!string.IsNullOrEmpty(leaderboardRankRequest.error)){
+				GoogleAnalytics.Instance.LogError("Failed to get leaderboard rank data! " + leaderboardRankRequest.error);
 
-			rankStorage[leaderboardId].isReady = true;
-		} catch(System.Exception e){
-			GoogleAnalytics.Instance.LogError("Rank JSON data invalid!" + e.Message, false);
+				rankStorage[leaderboardRankStorageRefId].isError = true;
+				rankStorage[leaderboardRankStorageRefId].isActive = false;
 
-			rankStorage[leaderboardId].isError = true;
-			rankStorage[leaderboardId].isActive = false;
+				if(debugMode)
+					Debug.Log("[DEBUG] Rank failed for " + leaderboardId + " error: " + leaderboardRankRequest.error);
+
+				if(OnRankRequestFailed != null)
+					OnRankRequestFailed.Invoke(leaderboardId, leaderboardRankRequest.error);
+
+				yield break;
+			}
+
+			string errorResponse;
+
+			if(IsErrorResponse(leaderboardId, leaderboardRankRequest.text, out errorResponse)){
+				GoogleAnalytics.Instance.LogError("Failed to get leaderboard rank data! " + errorResponse);
+
+				rankStorage[leaderboardRankStorageRefId].isError = true;
+				rankStorage[leaderboardRankStorageRefId].isActive = false;
+
+				if(debugMode)
+					Debug.Log("[DEBUG] Rank failed for " + leaderboardId + " error: " + errorResponse);
+
+				if(OnRankRequestFailed != null)
+					OnRankRequestFailed.Invoke(leaderboardId, errorResponse);
+
+				yield break;
+			}
+
+			try {
+				#if UNITY_5 || UNITY_2017_1_OR_NEWER
+					rankStorage[leaderboardRankStorageRefId] = JsonUtility.FromJson<RankResponse>(leaderboardRankRequest.text);
+				#else
+					JSONNode jsonData = JSON.Parse(leaderboardRankRequest.text);
+					rankStorage[leaderboardRankStorageRefId].response = jsonData["response"].ToString();
+				#endif
+
+				rankStorage[leaderboardRankStorageRefId].isReady = true;
+			} catch(System.Exception e){
+				GoogleAnalytics.Instance.LogError("Rank JSON data invalid!" + e.Message, false);
+
+				rankStorage[leaderboardRankStorageRefId].isError = true;
+				rankStorage[leaderboardRankStorageRefId].isActive = false;
+
+				if(debugMode)
+					Debug.Log("[DEBUG] Rank failed for " + leaderboardId + " error: " + e.Message);
+
+				if(OnRankRequestFailed != null)
+					OnRankRequestFailed.Invoke(leaderboardId, e.Message);
+
+				yield break;
+			}
+
+			// Cleanup the WWW request data
+			leaderboardRankRequest.Dispose();
+
+			rankStorage[leaderboardRankStorageRefId].isReady = true;
+			rankStorage[leaderboardRankStorageRefId].isActive = false;
 
 			if(debugMode)
-				Debug.Log("[DEBUG] Rank failed for " + leaderboardId + " error: " + e.Message);
-
-			if(OnRankRequestFailed != null)
-				OnRankRequestFailed.Invoke(leaderboardId, e.Message);
-
-			yield break;
+				Debug.Log("[DEBUG] Rank ready for " + leaderboardId + " rank is " + rankStorage[leaderboardRankStorageRefId].response);
+		} else {
+			if(debugMode)
+				Debug.Log("[DEBUG] Rank for " + leaderboardId + " loaded from cache as " + rankStorage[leaderboardRankStorageRefId].response);
 		}
-
-		// Cleanup the WWW request data
-		leaderboardRankRequest.Dispose();
-
-		rankStorage[leaderboardId].isReady = true;
-		rankStorage[leaderboardId].isActive = false;
-
-		if(debugMode)
-			Debug.Log("[DEBUG] Rank ready for " + leaderboardId + " rank is " + rankStorage[leaderboardId].response);
 
 		// Trigger the OnLeaderboardRankReady action
 		if(OnRankDone != null)
-			OnRankDone.Invoke(leaderboardId, rankStorage[leaderboardId]);
+			OnRankDone.Invoke(leaderboardId, rankStorage[leaderboardRankStorageRefId]);
 	}
 
-	private IEnumerator DoGetLeaderboardData(string leaderboardId, string deviceId = "", TimePeriod timePeriod = TimePeriod.AllTime, int pageNum = 0)
+	private IEnumerator DoGetLeaderboardData(string leaderboardId, string deviceId = "", TimePeriod timePeriod = TimePeriod.AllTime, int pageNum = 0, bool forceRefresh = false)
 	{
-		// Mark the rank as active (being processed)
-		leaderboardStorage[leaderboardId].isActive = true;
+		string leaderboardStorageRef = leaderboardId + deviceId + timePeriod + pageNum;
 
-		string requestURL = "https://data.i6.com/datastore.php?";
+		// Only re-download the leaderboard if it's not already ready and this isn't a force refresh request (otherwise we'll use the cached version)
+		if(!leaderboardStorage[leaderboardStorageRef].isReady || forceRefresh){
+			// Immediately check if we have an internet connection and exit early if not
+			if(Application.internetReachability == NetworkReachability.NotReachable){
+				if(selfRef.debugMode)
+					Debug.Log("[DEBUG] Failed to get leaderboard for " + leaderboardId + "! No internet connection");
 
-		// The queryString variable is setup to match the PHP $_SERVER['QUERY_STRING'] variable
-		string queryString = "action=get_leaderboard";
-		queryString += "&platform=" + Application.platform.ToString();
-		queryString += "&package_name=" + packageName;
-		queryString += "&leaderboard=" + leaderboardId;
-		queryString += "&time=" + timePeriod;
-		queryString += "&page=" + pageNum;
-		queryString += "&perpage=" + resultsPerPage;
-		queryString += "&token=" + WWW.EscapeURL(GetSecurityToken(), Encoding.UTF8);
-		queryString += deviceId != string.Empty ? "&device=" + deviceId : "";
+				if(OnLeaderboardConnectionFailed != null)
+					OnLeaderboardConnectionFailed.Invoke(leaderboardId);
 
-		requestURL += queryString;
+				yield break;
+			}
 
-		// The checksum allows us to validate that the requested URL matches the URL sent to the server
-		requestURL += "&checksum=" + WWW.EscapeURL(GenerateChecksum(queryString), Encoding.UTF8);
+			// Mark the rank as active (being processed)
+			leaderboardStorage[leaderboardStorageRef].isActive = true;
 
-		if(debugMode)
-			Debug.Log("[DEBUG] Send request to: " + requestURL);
+			string requestURL = "https://data.i6.com/datastore.php?";
 
-		// Request the leaderboard data from the server
-		WWW leaderboardRequest = new WWW(requestURL);
+			// The queryString variable is setup to match the PHP $_SERVER['QUERY_STRING'] variable
+			string queryString = "action=get_leaderboard";
+			queryString += "&platform=" + Application.platform.ToString();
+			queryString += "&package_name=" + packageName;
+			queryString += "&leaderboard=" + leaderboardId;
+			queryString += "&time=" + timePeriod;
+			queryString += "&page=" + pageNum;
+			queryString += "&perpage=" + resultsPerPage;
+			queryString += "&token=" + WWW.EscapeURL(GetSecurityToken(), Encoding.UTF8);
+			queryString += deviceId != string.Empty ? "&device=" + deviceId : "";
 
-		while(!leaderboardRequest.isDone)
-			yield return null;
+			requestURL += queryString;
 
-		if(!string.IsNullOrEmpty(leaderboardRequest.error)){
-			GoogleAnalytics.Instance.LogError("Failed to get leaderboard data! " + leaderboardRequest.error);
-
-			leaderboardStorage[leaderboardId].isError = true;
-			leaderboardStorage[leaderboardId].isActive = false;
-
-			if(debugMode)
-				Debug.Log("[DEBUG] Leaderboard failed for " + leaderboardId + " error: " + leaderboardRequest.error);
-
-			if(OnLeaderboardRequestFailed != null)
-				OnLeaderboardRequestFailed.Invoke(leaderboardId, leaderboardRequest.error);
-
-			yield break;
-		}
-
-		string errorResponse;
-
-		if(IsErrorResponse(leaderboardId, leaderboardRequest.text, out errorResponse)){
-			GoogleAnalytics.Instance.LogError("Failed to get leaderboard data! " + errorResponse);
-
-			leaderboardStorage[leaderboardId].isError = true;
-			leaderboardStorage[leaderboardId].isActive = false;
+			// The checksum allows us to validate that the requested URL matches the URL sent to the server
+			requestURL += "&checksum=" + WWW.EscapeURL(GenerateChecksum(queryString), Encoding.UTF8);
 
 			if(debugMode)
-				Debug.Log("[DEBUG] Leaderboard failed for " + leaderboardId + " error: " + errorResponse);
+				Debug.Log("[DEBUG] Send request to: " + requestURL);
 
-			if(OnLeaderboardRequestFailed != null)
-				OnLeaderboardRequestFailed.Invoke(leaderboardId, errorResponse);
+			// Request the leaderboard data from the server
+			WWW leaderboardRequest = new WWW(requestURL);
 
-			yield break;
-		}
+			while(!leaderboardRequest.isDone)
+				yield return null;
 
-		try {
-			#if UNITY_5_3_OR_NEWER
-				leaderboardStorage[leaderboardId] = JsonUtility.FromJson<LeaderboardResponse>(leaderboardRequest.text);
-			#else
-				leaderboardStorage[leaderboardId].response = new List<LeaderboardStorage>();
-				JSONNode jsonData = JSON.Parse(leaderboardRequest.text);
+			if(!string.IsNullOrEmpty(leaderboardRequest.error)){
+				GoogleAnalytics.Instance.LogError("Failed to get leaderboard data! " + leaderboardRequest.error);
 
-				// Iterate through each row of the leaderboard adding the results to the class storage
-				for(int rowId=0;rowId < jsonData["response"].AsArray.Count;rowId++)
-				{
-					JSONNode row = jsonData["response"].AsArray[rowId];
-					LeaderboardStorage leaderboardRowData = new LeaderboardStorage();
+				leaderboardStorage[leaderboardStorageRef].isError = true;
+				leaderboardStorage[leaderboardStorageRef].isActive = false;
 
-					leaderboardRowData.device_identifier = row["device_identifier"];
-					leaderboardRowData.nickname = row["nickname"];
-					leaderboardRowData.score = int.Parse(row["score"]);
-					leaderboardRowData.timestamp = long.Parse(row["timestamp"]);
+				if(debugMode)
+					Debug.Log("[DEBUG] Leaderboard failed for " + leaderboardId + " error: " + leaderboardRequest.error);
 
-					leaderboardStorage[leaderboardId].response.Add(leaderboardRowData);
-				}
-			#endif
+				if(OnLeaderboardRequestFailed != null)
+					OnLeaderboardRequestFailed.Invoke(leaderboardId, leaderboardRequest.error);
 
-			leaderboardStorage[leaderboardId].isReady = true;
-		} catch(System.Exception e){
-			GoogleAnalytics.Instance.LogError("Leaderboard JSON data invalid!" + e.Message, false);
+				yield break;
+			}
 
-			leaderboardStorage[leaderboardId].isError = true;
-			leaderboardStorage[leaderboardId].isActive = false;
+			string errorResponse;
+
+			if(IsErrorResponse(leaderboardId, leaderboardRequest.text, out errorResponse)){
+				GoogleAnalytics.Instance.LogError("Failed to get leaderboard data! " + errorResponse);
+
+				leaderboardStorage[leaderboardStorageRef].isError = true;
+				leaderboardStorage[leaderboardStorageRef].isActive = false;
+
+				if(debugMode)
+					Debug.Log("[DEBUG] Leaderboard failed for " + leaderboardId + " error: " + errorResponse);
+
+				if(OnLeaderboardRequestFailed != null)
+					OnLeaderboardRequestFailed.Invoke(leaderboardId, errorResponse);
+
+				yield break;
+			}
+
+			try {
+				#if UNITY_5_3_OR_NEWER
+					leaderboardStorage[leaderboardStorageRef] = JsonUtility.FromJson<LeaderboardResponse>(leaderboardRequest.text);
+
+					// Was trying with this to see if it would help.. but it didn't
+					//leaderboardStorage[leaderboardStorageRef] = new LeaderboardResponse();
+					//leaderboardStorage[leaderboardStorageRef].response = new List<LeaderboardStorage>();
+					//leaderboardStorage[leaderboardStorageRef].response.Add(new LeaderboardStorage());
+					//leaderboardStorage[leaderboardStorageRef].response[0].nickname = "Test Successful";
+				#else
+					leaderboardStorage[leaderboardStorageRef].response = new List<LeaderboardStorage>();
+					JSONNode jsonData = JSON.Parse(leaderboardRequest.text);
+
+					// Iterate through each row of the leaderboard adding the results to the class storage
+					for(int rowId=0;rowId < jsonData["response"].AsArray.Count;rowId++)
+					{
+						JSONNode row = jsonData["response"].AsArray[rowId];
+						LeaderboardStorage leaderboardRowData = new LeaderboardStorage();
+
+						leaderboardRowData.device_identifier = row["device_identifier"];
+						leaderboardRowData.nickname = row["nickname"];
+						leaderboardRowData.score = int.Parse(row["score"]);
+						leaderboardRowData.timestamp = long.Parse(row["timestamp"]);
+
+						leaderboardStorage[leaderboardStorageRef].response.Add(leaderboardRowData);
+					}
+				#endif
+
+				leaderboardStorage[leaderboardStorageRef].isReady = true;
+			} catch(System.Exception e){
+				GoogleAnalytics.Instance.LogError("Leaderboard JSON data invalid!" + e.Message, false);
+
+				leaderboardStorage[leaderboardStorageRef].isError = true;
+				leaderboardStorage[leaderboardStorageRef].isActive = false;
+
+				if(debugMode)
+					Debug.Log("[DEBUG] Leaderboard failed for " + leaderboardId + " error: " + e.Message);
+
+				if(OnLeaderboardRequestFailed != null)
+					OnLeaderboardRequestFailed.Invoke(leaderboardId, e.Message);
+				yield break;
+			}
+
+			// Cleanup the WWW request data
+			leaderboardRequest.Dispose();
+
+			leaderboardStorage[leaderboardStorageRef].isReady = true;
+			leaderboardStorage[leaderboardStorageRef].isActive = false;
 
 			if(debugMode)
-				Debug.Log("[DEBUG] Leaderboard failed for " + leaderboardId + " error: " + e.Message);
-
-			if(OnLeaderboardRequestFailed != null)
-				OnLeaderboardRequestFailed.Invoke(leaderboardId, e.Message);
-			yield break;
+				Debug.Log("[DEBUG] Leaderboard ready for " + leaderboardId + " found " + leaderboardStorage[leaderboardStorageRef].Count() + " rows");
+		} else {
+			if(debugMode)
+				Debug.Log("[DEBUG] Leaderboard for " + leaderboardId + " loaded from cache with " + leaderboardStorage[leaderboardStorageRef].Count() + " rows");
 		}
-
-		// Cleanup the WWW request data
-		leaderboardRequest.Dispose();
-
-		leaderboardStorage[leaderboardId].isReady = true;
-		leaderboardStorage[leaderboardId].isActive = false;
-
-		if(debugMode)
-			Debug.Log("[DEBUG] Leaderboard ready for " + leaderboardId + " found " + leaderboardStorage[leaderboardId].Count() + " rows");
 
 		// Trigger the OnLeaderboardReady action
 		if(OnLeaderboardDone != null)
-			OnLeaderboardDone.Invoke(leaderboardId, leaderboardStorage[leaderboardId]);
+			OnLeaderboardDone.Invoke(leaderboardId, leaderboardStorage[leaderboardStorageRef]);
 	}
 
 	private IEnumerator DoAdjustLeaderboardData(string leaderboardId, string deviceId, string nickname, int scoreAdjust)
 	{
-		isScoreSubmitting = true;
+		// Mark the leaderboard submission as true (active submission)
+		leaderboardSubmissions[leaderboardId] = true;
 
 		string requestURL = "https://data.i6.com/datastore.php?";
 
@@ -543,7 +597,7 @@ public class LeaderboardManager : MonoBehaviour {
 		if(!string.IsNullOrEmpty(leaderboardRequest.error)){
 			GoogleAnalytics.Instance.LogError("Failed to adjust leaderboard! " + leaderboardRequest.error);
 
-			isScoreSubmitting = false;
+			leaderboardSubmissions[leaderboardId] = false;
 
 			if(debugMode)
 				Debug.Log("[DEBUG] Adjust failed for " + leaderboardId + " error: " + leaderboardRequest.error);
@@ -559,7 +613,7 @@ public class LeaderboardManager : MonoBehaviour {
 		if(IsErrorResponse(leaderboardId, leaderboardRequest.text, out errorResponse)){
 			GoogleAnalytics.Instance.LogError("Failed to adjust leaderboard! " + errorResponse);
 
-			isScoreSubmitting = false;
+			leaderboardSubmissions[leaderboardId] = false;
 
 			if(debugMode)
 				Debug.Log("[DEBUG] Adjust failed for " + leaderboardId + " error: " + errorResponse);
@@ -573,7 +627,7 @@ public class LeaderboardManager : MonoBehaviour {
 		// Cleanup the WWW request data
 		leaderboardRequest.Dispose();
 
-		isScoreSubmitting = false;
+		leaderboardSubmissions[leaderboardId] = false;
 
 		if(debugMode)
 			Debug.Log("[DEBUG] Adjust complete for " + leaderboardId + " with score " + scoreAdjust);
@@ -586,7 +640,8 @@ public class LeaderboardManager : MonoBehaviour {
 	// Setting the leaderboard doesn't touch the Leaderboards[..] data just incase we're reading at the same time as submitting
 	private IEnumerator DoSetLeaderboardData(string leaderboardId, string deviceId, string nickname, int score)
 	{
-		isScoreSubmitting = true;
+		// Mark the leaderboard submission as true (active submission)
+		leaderboardSubmissions[leaderboardId] = true;
 
 		string requestURL = "https://data.i6.com/datastore.php?";
 
@@ -618,7 +673,7 @@ public class LeaderboardManager : MonoBehaviour {
 		if(!string.IsNullOrEmpty(leaderboardRequest.error)){
 			GoogleAnalytics.Instance.LogError("Failed to submit leaderboard! " + leaderboardRequest.error);
 
-			isScoreSubmitting = false;
+			leaderboardSubmissions[leaderboardId] = false;
 
 			if(debugMode)
 				Debug.Log("[DEBUG] Submit failed for " + leaderboardId + " error: " + leaderboardRequest.error);
@@ -634,7 +689,7 @@ public class LeaderboardManager : MonoBehaviour {
 		if(IsErrorResponse(leaderboardId, leaderboardRequest.text, out errorResponse)){
 			GoogleAnalytics.Instance.LogError("Failed to submit leaderboard! " + errorResponse);
 
-			isScoreSubmitting = false;
+			leaderboardSubmissions[leaderboardId] = false;
 
 			if(debugMode)
 				Debug.Log("[DEBUG] Submit failed for " + leaderboardId + " error: " + errorResponse);
@@ -648,7 +703,7 @@ public class LeaderboardManager : MonoBehaviour {
 		// Cleanup the WWW request data
 		leaderboardRequest.Dispose();
 
-		isScoreSubmitting = false;
+		leaderboardSubmissions[leaderboardId] = false;
 
 		if(debugMode)
 			Debug.Log("[DEBUG] Submit complete for " + leaderboardId + " with score " + score);
