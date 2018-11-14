@@ -2,8 +2,8 @@
 using System.Collections.Generic;
 using UnityEngine;
 using System;
-using System.Security.Cryptography;
 using System.Text;
+using UnityEngine.Networking;
 
 #if !UNITY_5_3_OR_NEWER
 	// Older versions of Unity don't support JsonUtility so fallback to using the SimpleJSON plugin
@@ -39,12 +39,47 @@ public class LeaderboardResponse {
 }
 
 [Serializable]
+public class RawCombinedLeaderboardResponse {
+	public RawCombinedLeaderboardResponseData[] response;
+}
+
+[Serializable]
+public class RawCombinedLeaderboardResponseData {
+	public List<LeaderboardStorage> data;
+	public string leaderboardId;
+	public string pageNum;
+}
+
+[Serializable]
+public class RawCombinedRankResponse {
+	public RawCombinedRankResponseData[] response;
+}
+
+[Serializable]
+public class RawCombinedRankResponseData {
+	public string rankData;
+	public string leaderboardId;
+}
+
+[Serializable]
 public class RankResponse {
 	public string response;
 
 	public bool isReady { get; set; }
 	public bool isError { get; set; }
 	public bool isActive { get; set; }
+}
+
+[Serializable]
+public class SubmissionCache {
+	public string nickname;
+	public int score;
+
+	public SubmissionCache(string inNickname, int inScore)
+	{
+		nickname = inNickname;
+		score = inScore;
+	}
 }
 
 public class LeaderboardManager : MonoBehaviour {
@@ -58,14 +93,21 @@ public class LeaderboardManager : MonoBehaviour {
 	// Leaderboard submission dictionary (to keep track of which leaderboards are currently being submitted)
 	private Dictionary<string, bool> leaderboardSubmissions = new Dictionary<string, bool>();
 
+	// Keep a dictionary of submitted values so we don't need to submit the same scores again
+	private Dictionary<string, SubmissionCache> leaderboardSubmissionCache = new Dictionary<string, SubmissionCache>();
+
 	// Rank dictionary (the keys are the leaderboard identifiers)
 	private Dictionary<string, RankResponse> rankStorage = new Dictionary<string, RankResponse>();
 
 	// This is a fixed value because I have complicated serverside caching of queries which becomes messy if the results per page changes for each request
 	public int resultsPerPage = 20;
 
+	public string requestURL = "https://data.i6.com/datastore.php";
+
+	public enum DebugModeTypes { None, RequestsOnly, Full }
+
 	// When true extra messages will be logged which information about the requests
-	public bool debugMode = false;
+	public DebugModeTypes debugMode = DebugModeTypes.RequestsOnly;
 
 	// Whether having no results should be treated as an error
 	// Can be useful if you want to show a message instead of an empty leaderboard
@@ -100,6 +142,9 @@ public class LeaderboardManager : MonoBehaviour {
 		// Older versions of Unity didn't have a way to get the bundle name via script..
 		public string packageName = "com.pickle.CHANGE_THIS";
 	#endif
+
+	public int serverRequests = 0;
+	public int cachedRequests = 0;
 
 	void Awake()
 	{
@@ -161,6 +206,58 @@ public class LeaderboardManager : MonoBehaviour {
 		return rank != null ? rank.isActive : false;
 	}
 
+	private UnityWebRequest DoWebRequest(Dictionary<string, string> postData, bool sendValidationToken, bool sendChecksum)
+	{
+		// Add the always included platform and package_name to the post data
+		postData.Add("platform", Application.platform.ToString());
+		postData.Add("package_name", packageName);
+
+		// If this request requires a validation token, add it to the post request
+		if(sendValidationToken)
+			postData.Add("token", GetSecurityToken());
+
+		// We're done building the postData, now it will be turned into the post request (checksum will be added as a final post if sendChecksum is true)
+		List<IMultipartFormSection> postRequest = new List<IMultipartFormSection>();
+
+		// Add the post request values sent with the postData dictionary parameter
+		foreach(KeyValuePair<string, string> post in postData)
+			postRequest.Add(new MultipartFormDataSection(post.Key, post.Value, Encoding.UTF8, "multipart/form-data"));
+
+		// If this request requires a checksum, add it to the post request
+		if(sendChecksum){
+			// The checksum allows us to validate that the requested URL matches the URL sent to the server
+			string postDataString = string.Empty;
+
+			// Create a string of all posted data (this is also done on the serverside for comparison)
+			foreach(KeyValuePair<string, string> curPostData in postData)
+				postDataString += curPostData.Value;
+
+			postRequest.Add(new MultipartFormDataSection("checksum", GenerateChecksum(postDataString), Encoding.UTF8, "multipart/form-data"));
+
+			// If we're in debug mode then we'll also add the checksum to the postData so it can be logged for debugging
+			if(debugMode == DebugModeTypes.Full){
+				Debug.Log("Decoded checksum data: " + postDataString);
+
+				postData.Add("checksum", GenerateChecksum(postDataString));
+			}
+		}
+
+		if(debugMode == DebugModeTypes.RequestsOnly)
+			Debug.Log("[DEBUG] Sending request to: " + requestURL + " (type: " + postData["action"] + ", ref: " + postData["leaderboard"] + ")");
+
+		if(debugMode == DebugModeTypes.Full){
+			foreach(KeyValuePair<string, string> curPostData in postData)
+				Debug.Log("[DEBUG] Post data '" + curPostData.Key + "' => '" + curPostData.Value + "'");
+		}
+
+		// Increment the server request counter
+		serverRequests++;
+
+		// Send the POST request to the URL with our built list of POST requests
+		return UnityWebRequest.Post(requestURL, postRequest);
+	}
+
+
 	// Gets a leaderboard by the leaderboardId (returns null if there's no leaderboard data ready, or returns a blank LeaderboardResponse if the request hasn't finished yet)
 	// Check with IsLeaderboardReady(..) first if you want to know the status, or wait for the callback
 	public static LeaderboardResponse GetLeaderboard(string leaderboardId, string deviceId = "", TimePeriod timePeriod = TimePeriod.AllTime, int pageNum = 0)
@@ -212,6 +309,12 @@ public class LeaderboardManager : MonoBehaviour {
 			selfRef.leaderboardSubmissions.Add(leaderboardId, false);
 	}
 
+	public static void GetCombinedLeaderboardData(string leaderboardKey, List<string> leaderboardId, List<TimePeriod> timePeriod, List<int> pageNum, string deviceId = "", bool forceRefresh = false)
+	{
+		// Start the leaderboard routine, this will send a server request for the data in the leaderboard
+		selfRef.StartCoroutine(selfRef.DoGetCombinedLeaderboardData(leaderboardKey, leaderboardId, timePeriod, pageNum, deviceId, forceRefresh));
+	}
+
 	// Send a request for the leaderboard submissions within the requested leaderboard (only from this device if DeviceId is defined)
 	public static void GetLeaderboardData(string leaderboardId, string deviceId = "", TimePeriod timePeriod = TimePeriod.AllTime, int pageNum = 0, bool forceRefresh = false)
 	{
@@ -222,12 +325,18 @@ public class LeaderboardManager : MonoBehaviour {
 			// Start the leaderboard routine, if the leaderboard isn't already cached or this is a force refresh request this will send a server request for the wanted data
 			selfRef.StartCoroutine(selfRef.DoGetLeaderboardData(leaderboardId, deviceId, timePeriod, pageNum, forceRefresh));
 		} else {
-			if(selfRef.debugMode)
+			if(selfRef.debugMode == DebugModeTypes.Full)
 				Debug.Log("[DEBUG] Get leaderboard for " + leaderboardId + " was already active");
 
 			if(OnLeaderboardAlreadyPending != null)
 				OnLeaderboardAlreadyPending.Invoke(leaderboardId);
 		}
+	}
+
+	public static void GetCombinedLeaderboardRankData(string leaderboardRankKey, List<string> leaderboardId, List<int> score, List<TimePeriod> timePeriod, string deviceId = "", bool forceRefresh = false)
+	{
+		// Start the leaderboard routine, this will send a server request for the rank of the scores in the leaderboard
+		selfRef.StartCoroutine(selfRef.DoGetCombinedLeaderboardRankData(leaderboardRankKey, leaderboardId, score, timePeriod, deviceId, forceRefresh));
 	}
 
 	// Send a request for what rank a score would be in the leaderboard
@@ -240,7 +349,7 @@ public class LeaderboardManager : MonoBehaviour {
 			// Start the leaderboard routine, this will send a server request for the rank a score has in the leaderboard
 			selfRef.StartCoroutine(selfRef.DoGetLeaderboardRankData(leaderboardId, score, timePeriod, deviceId, forceRefresh));
 		} else {
-			if(selfRef.debugMode)
+			if(selfRef.debugMode == DebugModeTypes.Full)
 				Debug.Log("[DEBUG] Get rank for " + leaderboardId + " was already active");
 
 			if(OnRankAlreadyPending != null)
@@ -260,14 +369,14 @@ public class LeaderboardManager : MonoBehaviour {
 				// Start the leaderboard routine, this will send a server request to submit the score
 				selfRef.StartCoroutine(selfRef.DoAdjustLeaderboardData(leaderboardId, deviceId, nickname, scoreChange));
 			} else {
-				if(selfRef.debugMode)
+				if(selfRef.debugMode == DebugModeTypes.Full)
 					Debug.Log("[DEBUG] Failed to adjust " + leaderboardId + "! No internet connection");
 
 				if(OnSubmitConnectionFailed != null)
 					OnSubmitConnectionFailed.Invoke(leaderboardId);
 			}
 		} else {
-			if(selfRef.debugMode)
+			if(selfRef.debugMode == DebugModeTypes.Full)
 				Debug.Log("[DEBUG] Failed to adjust " + leaderboardId + " as another submit was still active");
 
 			if(OnSubmitAlreadyPending != null)
@@ -287,18 +396,240 @@ public class LeaderboardManager : MonoBehaviour {
 				// Start the leaderboard routine, this will send a server request to submit the score
 				selfRef.StartCoroutine(selfRef.DoSetLeaderboardData(leaderboardId, deviceId, nickname, score));
 			} else {
-				if(selfRef.debugMode)
+				if(selfRef.debugMode == DebugModeTypes.Full)
 					Debug.Log("[DEBUG] Failed to submit " + leaderboardId + "! No internet connection");
 
 				if(OnSubmitConnectionFailed != null)
 					OnSubmitConnectionFailed.Invoke(leaderboardId);
 			}
 		} else {
-			if(selfRef.debugMode)
+			if(selfRef.debugMode == DebugModeTypes.Full)
 				Debug.Log("[DEBUG] Failed to submit " + leaderboardId + " as another submit was still active");
 
 			if(OnSubmitAlreadyPending != null)
 				OnSubmitAlreadyPending.Invoke(leaderboardId);
+		}
+	}
+
+	// Submit multiple leaderboard scores at once (all combined into a single web request)
+	public static void SetCombinedLeaderboardData(string leaderboardSubmissionKey, List<string> leaderboardId, List<int> score, string deviceId, string nickname)
+	{
+		if(!IsSubmitActive(leaderboardSubmissionKey)){
+			// Create the leaderboard submission key in the dictionary if it doesn't exist
+			selfRef.SetupSubmissionKey(leaderboardSubmissionKey);
+
+			// Don't even bother starting the routine if we don't have a working internet connection
+			if(Application.internetReachability != NetworkReachability.NotReachable){
+				// Start the leaderboard routine, this will send a server request to submit the score
+				selfRef.StartCoroutine(selfRef.DoSetCombinedLeaderboardData(leaderboardSubmissionKey, leaderboardId, score, deviceId, nickname));
+			} else {
+				if(selfRef.debugMode == DebugModeTypes.Full)
+					Debug.Log("[DEBUG] Failed to combined submit " + leaderboardSubmissionKey + "! No internet connection");
+
+				if(OnSubmitConnectionFailed != null)
+					OnSubmitConnectionFailed.Invoke(leaderboardSubmissionKey);
+			}
+		} else {
+			if(selfRef.debugMode == DebugModeTypes.Full)
+				Debug.Log("[DEBUG] Failed to combined submit " + leaderboardSubmissionKey + " as another submit was still active");
+
+			if(OnSubmitAlreadyPending != null)
+				OnSubmitAlreadyPending.Invoke(leaderboardSubmissionKey);
+		}
+	}
+
+	public static void AdjustCombinedLeaderboardData(string leaderboardSubmissionKey, List<string> leaderboardId, List<int> scoreChange, string deviceId, string nickname)
+	{
+		if(!IsSubmitActive(leaderboardSubmissionKey)){
+			// Create the leaderboard submission key in the dictionary if it doesn't exist
+			selfRef.SetupSubmissionKey(leaderboardSubmissionKey);
+
+			// Don't even bother starting the routine if we don't have a working internet connection
+			if(Application.internetReachability != NetworkReachability.NotReachable){
+				// Start the leaderboard routine, this will send a server request to submit the score
+				selfRef.StartCoroutine(selfRef.DoAdjustCombinedLeaderboardData(leaderboardSubmissionKey, leaderboardId, scoreChange, deviceId, nickname));
+			} else {
+				if(selfRef.debugMode == DebugModeTypes.Full)
+					Debug.Log("[DEBUG] Failed to combined adjust " + leaderboardSubmissionKey + "! No internet connection");
+
+				if(OnSubmitConnectionFailed != null)
+					OnSubmitConnectionFailed.Invoke(leaderboardSubmissionKey);
+			}
+		} else {
+			if(selfRef.debugMode == DebugModeTypes.Full)
+				Debug.Log("[DEBUG] Failed to combined adjust " + leaderboardSubmissionKey + " as another submit was still active");
+
+			if(OnSubmitAlreadyPending != null)
+				OnSubmitAlreadyPending.Invoke(leaderboardSubmissionKey);
+		}
+	}
+
+	// Delete a score from the requested leaderboard (useful in cases where either the player or guild has been deleted/banned)
+	public static void DeleteLeaderboardData(string leaderboardId, string deviceId)
+	{
+		if(!IsSubmitActive(leaderboardId)){
+			// Create a the leaderboard submission key in the dictionary if it doesn't exist
+			selfRef.SetupSubmissionKey(leaderboardId);
+
+			// Don't even bother starting the routine if we don't have a working internet connection
+			if(Application.internetReachability != NetworkReachability.NotReachable){
+				// Start the leaderboard routine, this will send a server request to delete the score
+				selfRef.StartCoroutine(selfRef.DoDeleteLeaderboardData(leaderboardId, deviceId));
+			} else {
+				if(selfRef.debugMode == DebugModeTypes.Full)
+					Debug.Log("[DEBUG] Failed to submit " + leaderboardId + "! No internet connection");
+
+				if(OnSubmitConnectionFailed != null)
+					OnSubmitConnectionFailed.Invoke(leaderboardId);
+			}
+		} else {
+			if(selfRef.debugMode == DebugModeTypes.Full)
+				Debug.Log("[DEBUG] Failed to delete " + leaderboardId + " as another submit was still active");
+
+			if(OnSubmitAlreadyPending != null)
+				OnSubmitAlreadyPending.Invoke(leaderboardId);
+		}
+	}
+
+	private IEnumerator DoGetCombinedLeaderboardRankData(string leaderboardRankKey, List<string> leaderboardId, List<int> score, List<TimePeriod> timePeriod, string deviceId = "", bool forceRefresh = false)
+	{
+		string[] leaderboardKeys = new string[leaderboardId.Count];
+
+		string pendingQueryLeaderboardIds = "";
+		string pendingQueryScores = "";
+		string pendingQueryTimePeriods = "";
+
+		for(int i=0;i < leaderboardId.Count;i++)
+		{
+			leaderboardKeys[i] = leaderboardId[i] + deviceId;
+
+			// Create the leaderboard rank key in the dictionary if it doesn't exist
+			selfRef.SetupRanksKey(leaderboardKeys[i]);
+
+			// Mark the rank as active (being processed)
+			rankStorage[leaderboardKeys[i]].isActive = true;
+
+			if(!rankStorage[leaderboardKeys[i]].isReady || forceRefresh){
+				pendingQueryLeaderboardIds += (!string.IsNullOrEmpty(pendingQueryLeaderboardIds) ? "," : "") + leaderboardId[i];
+				pendingQueryScores += (!string.IsNullOrEmpty(pendingQueryScores) ? "," : "") + score[i];
+				pendingQueryTimePeriods += (!string.IsNullOrEmpty(pendingQueryTimePeriods) ? "," : "") + timePeriod[i];
+			}
+		}
+
+		if(!string.IsNullOrEmpty(pendingQueryLeaderboardIds)){
+			Dictionary<string, string> postData = new Dictionary<string, string>();
+			postData.Add("action", "get_leaderboard_rank_combined");
+			postData.Add("leaderboard", pendingQueryLeaderboardIds);
+			postData.Add("score", pendingQueryScores);
+			postData.Add("time", pendingQueryTimePeriods);
+
+			if(deviceId != string.Empty)
+				postData.Add("device", deviceId);
+
+			UnityWebRequest leaderboardRankRequest = DoWebRequest(postData, true, true);
+			DownloadHandler leaderboardRankDownloadHandler = leaderboardRankRequest.downloadHandler;
+
+			// Wait for the web request to complete
+			yield return leaderboardRankRequest.SendWebRequest();
+
+			if(leaderboardRankRequest.isHttpError || leaderboardRankRequest.isNetworkError || !string.IsNullOrEmpty(leaderboardRankRequest.error)){
+				GoogleAnalytics.Instance.LogError("Failed to get leaderboard rank data! " + leaderboardRankRequest.error);
+
+				foreach(string rankKey in leaderboardKeys)
+				{
+					rankStorage[rankKey].isError = true;
+					rankStorage[rankKey].isActive = false;
+				}
+
+				if(debugMode == DebugModeTypes.Full)
+					Debug.Log("[DEBUG] Rank failed for " + leaderboardRankKey + " error: " + leaderboardRankRequest.error);
+
+				if(OnRankRequestFailed != null)
+					OnRankRequestFailed.Invoke(leaderboardRankKey, leaderboardRankRequest.error);
+
+				yield break;
+			}
+
+			string errorResponse;
+
+			if(IsErrorResponse(leaderboardRankKey, leaderboardRankDownloadHandler.text, out errorResponse)){
+				GoogleAnalytics.Instance.LogError("Failed to get leaderboard rank data! " + errorResponse);
+
+				foreach(string rankKey in leaderboardKeys)
+				{
+					rankStorage[rankKey].isError = true;
+					rankStorage[rankKey].isActive = false;
+				}
+
+				if(debugMode == DebugModeTypes.Full)
+					Debug.Log("[DEBUG] Rank failed for " + leaderboardRankKey + " error: " + errorResponse);
+
+				if(OnRankRequestFailed != null)
+					OnRankRequestFailed.Invoke(leaderboardRankKey, errorResponse);
+
+				yield break;
+			}
+
+			try {
+				RawCombinedRankResponse combinedLeaderboardResponse = JsonUtility.FromJson<RawCombinedRankResponse>(leaderboardRankDownloadHandler.text);
+
+				for(int i=0;i < combinedLeaderboardResponse.response.Length;i++)
+				{
+					string rankKey = combinedLeaderboardResponse.response[i].leaderboardId + deviceId;
+
+					rankStorage[rankKey].response = combinedLeaderboardResponse.response[i].rankData;
+					rankStorage[rankKey].isReady = true;
+				}
+			} catch(System.Exception e){
+				GoogleAnalytics.Instance.LogError("Rank JSON data invalid!" + e.Message, false);
+
+				foreach(string rankKey in leaderboardKeys)
+				{
+					rankStorage[rankKey].isError = true;
+					rankStorage[rankKey].isActive = false;
+				}
+
+				if(debugMode == DebugModeTypes.Full)
+					Debug.Log("[DEBUG] Rank failed for " + leaderboardRankKey + " error: " + e.Message);
+
+				if(OnRankRequestFailed != null)
+					OnRankRequestFailed.Invoke(leaderboardRankKey, e.Message);
+
+				yield break;
+			}
+
+			// Cleanup the WWW request data
+			leaderboardRankRequest.Dispose();
+			leaderboardRankDownloadHandler.Dispose();
+
+			foreach(string rankKey in leaderboardKeys)
+			{
+				rankStorage[rankKey].isReady = true;
+				rankStorage[rankKey].isActive = false;
+			}
+
+			if(debugMode == DebugModeTypes.Full){
+				foreach(string rankKey in leaderboardKeys)
+				{
+					Debug.Log("[DEBUG] Rank ready for " + rankKey + " rank is " + rankStorage[rankKey].response);
+				}
+			}
+		} else {
+			cachedRequests++;
+
+			if(debugMode == DebugModeTypes.Full){
+				foreach(string rankKey in leaderboardKeys)
+				{
+					Debug.Log("[DEBUG] Rank for " + rankKey + " loaded from cache as " + rankStorage[rankKey].response);
+				}
+			}
+		}
+
+		foreach(string rankKey in leaderboardKeys)
+		{
+			// Trigger the OnLeaderboardRankReady action
+			if(OnRankDone != null)
+				OnRankDone.Invoke(rankKey, rankStorage[rankKey]);
 		}
 	}
 
@@ -310,7 +641,7 @@ public class LeaderboardManager : MonoBehaviour {
 		if(!rankStorage[leaderboardRankStorageRefId].isReady || forceRefresh){
 			// Immediately check if we have an internet connection and exit early if not
 			if(Application.internetReachability == NetworkReachability.NotReachable){
-				if(selfRef.debugMode)
+				if(selfRef.debugMode == DebugModeTypes.Full)
 					Debug.Log("[DEBUG] Failed to get rank for " + leaderboardId + "! No internet connection");
 
 				if(OnRankConnectionFailed != null)
@@ -321,40 +652,29 @@ public class LeaderboardManager : MonoBehaviour {
 
 			// Mark the rank as active (being processed)
 			rankStorage[leaderboardRankStorageRefId].isActive = true;
+			
+			Dictionary<string, string> postData = new Dictionary<string, string>();
+			postData.Add("action", "get_leaderboard_rank");
+			postData.Add("leaderboard", leaderboardId);
+			postData.Add("score", score.ToString());
+			postData.Add("time", timePeriod.ToString());
 
-			string requestURL = "https://data.i6.com/datastore.php?";
+			if(deviceId != string.Empty)
+				postData.Add("device", deviceId);
 
-			// The queryString variable is setup to match the PHP $_SERVER['QUERY_STRING'] variable
-			string queryString = "action=get_leaderboard_rank";
-			queryString += "&platform=" + Application.platform.ToString();
-			queryString += "&package_name=" + packageName;
-			queryString += "&leaderboard=" + leaderboardId;
-			queryString += "&score=" + score;
-			queryString += "&time=" + timePeriod;
-			queryString += "&token=" + WWW.EscapeURL(GetSecurityToken(), Encoding.UTF8);
-			queryString += deviceId != string.Empty ? "&device=" + deviceId : "";
+			UnityWebRequest leaderboardRankRequest = DoWebRequest(postData, true, true);
+			DownloadHandler leaderboardRankDownloadHandler = leaderboardRankRequest.downloadHandler;
 
-			requestURL += queryString;
+			// Wait for the web request to complete
+			yield return leaderboardRankRequest.SendWebRequest();
 
-			// The checksum allows us to validate that the requested URL matches the URL sent to the server
-			requestURL += "&checksum=" + WWW.EscapeURL(GenerateChecksum(queryString), Encoding.UTF8);
-
-			if(debugMode)
-				Debug.Log("[DEBUG] Send request to: " + requestURL);
-
-			// Request the leaderboard rank data from the server
-			WWW leaderboardRankRequest = new WWW(requestURL);
-
-			while(!leaderboardRankRequest.isDone)
-				yield return null;
-
-			if(!string.IsNullOrEmpty(leaderboardRankRequest.error)){
+			if(leaderboardRankRequest.isHttpError || leaderboardRankRequest.isNetworkError || !string.IsNullOrEmpty(leaderboardRankRequest.error)){
 				GoogleAnalytics.Instance.LogError("Failed to get leaderboard rank data! " + leaderboardRankRequest.error);
 
 				rankStorage[leaderboardRankStorageRefId].isError = true;
 				rankStorage[leaderboardRankStorageRefId].isActive = false;
 
-				if(debugMode)
+				if(debugMode == DebugModeTypes.Full)
 					Debug.Log("[DEBUG] Rank failed for " + leaderboardId + " error: " + leaderboardRankRequest.error);
 
 				if(OnRankRequestFailed != null)
@@ -365,13 +685,13 @@ public class LeaderboardManager : MonoBehaviour {
 
 			string errorResponse;
 
-			if(IsErrorResponse(leaderboardId, leaderboardRankRequest.text, out errorResponse)){
+			if(IsErrorResponse(leaderboardId, leaderboardRankDownloadHandler.text, out errorResponse)){
 				GoogleAnalytics.Instance.LogError("Failed to get leaderboard rank data! " + errorResponse);
 
 				rankStorage[leaderboardRankStorageRefId].isError = true;
 				rankStorage[leaderboardRankStorageRefId].isActive = false;
 
-				if(debugMode)
+				if(debugMode == DebugModeTypes.Full)
 					Debug.Log("[DEBUG] Rank failed for " + leaderboardId + " error: " + errorResponse);
 
 				if(OnRankRequestFailed != null)
@@ -382,9 +702,9 @@ public class LeaderboardManager : MonoBehaviour {
 
 			try {
 				#if UNITY_5 || UNITY_2017_1_OR_NEWER
-					rankStorage[leaderboardRankStorageRefId] = JsonUtility.FromJson<RankResponse>(leaderboardRankRequest.text);
+					rankStorage[leaderboardRankStorageRefId] = JsonUtility.FromJson<RankResponse>(leaderboardRankDownloadHandler.text);
 				#else
-					JSONNode jsonData = JSON.Parse(leaderboardRankRequest.text);
+					JSONNode jsonData = JSON.Parse(leaderboardRankDownloadHandler.text);
 					rankStorage[leaderboardRankStorageRefId].response = jsonData["response"].ToString();
 				#endif
 
@@ -395,7 +715,7 @@ public class LeaderboardManager : MonoBehaviour {
 				rankStorage[leaderboardRankStorageRefId].isError = true;
 				rankStorage[leaderboardRankStorageRefId].isActive = false;
 
-				if(debugMode)
+				if(debugMode == DebugModeTypes.Full)
 					Debug.Log("[DEBUG] Rank failed for " + leaderboardId + " error: " + e.Message);
 
 				if(OnRankRequestFailed != null)
@@ -410,16 +730,158 @@ public class LeaderboardManager : MonoBehaviour {
 			rankStorage[leaderboardRankStorageRefId].isReady = true;
 			rankStorage[leaderboardRankStorageRefId].isActive = false;
 
-			if(debugMode)
+			if(debugMode == DebugModeTypes.Full)
 				Debug.Log("[DEBUG] Rank ready for " + leaderboardId + " rank is " + rankStorage[leaderboardRankStorageRefId].response);
 		} else {
-			if(debugMode)
+			cachedRequests++;
+
+			if(debugMode == DebugModeTypes.Full)
 				Debug.Log("[DEBUG] Rank for " + leaderboardId + " loaded from cache as " + rankStorage[leaderboardRankStorageRefId].response);
 		}
 
 		// Trigger the OnLeaderboardRankReady action
 		if(OnRankDone != null)
 			OnRankDone.Invoke(leaderboardId, rankStorage[leaderboardRankStorageRefId]);
+	}
+
+	private IEnumerator DoGetCombinedLeaderboardData(string leaderboardKey, List<string> leaderboardId, List<TimePeriod> timePeriod, List<int> pageNum, string deviceId = "", bool forceRefresh = false)
+	{
+		string[] leaderboardKeys = new string[leaderboardId.Count];
+
+		string pendingQueryLeaderboardIds = "";
+		string pendingQueryTimePeriods = "";
+		string pendingQueryPageNums = "";
+
+		for(int i=0;i < leaderboardId.Count;i++)
+		{
+			leaderboardKeys[i] = leaderboardId[i] + deviceId + "_p" + pageNum[i];
+
+			// Create the leaderboard key in the dictionary if it doesn't exist
+			selfRef.SetupLeaderboardsKey(leaderboardKeys[i]);
+
+			if(!leaderboardStorage[leaderboardKeys[i]].isReady || forceRefresh){
+				pendingQueryLeaderboardIds += (!string.IsNullOrEmpty(pendingQueryLeaderboardIds) ? "," : "") + leaderboardId[i];
+				pendingQueryTimePeriods += (!string.IsNullOrEmpty(pendingQueryTimePeriods) ? "," : "") + timePeriod[i];
+				pendingQueryPageNums += (!string.IsNullOrEmpty(pendingQueryPageNums) ? "," : "") + pageNum[i];
+			}
+		}
+
+		if(!string.IsNullOrEmpty(pendingQueryLeaderboardIds)){
+			Dictionary<string, string> postData = new Dictionary<string, string>();
+			postData.Add("action", "get_leaderboard_combined");
+			postData.Add("leaderboard", pendingQueryLeaderboardIds);
+			postData.Add("time", pendingQueryTimePeriods);
+			postData.Add("page", pendingQueryPageNums);
+			postData.Add("perpage", resultsPerPage.ToString());
+
+			if(deviceId != string.Empty)
+				postData.Add("device", deviceId);
+
+			UnityWebRequest leaderboardRequest = DoWebRequest(postData, true, true);
+			DownloadHandler leaderboardDownloadHandler = leaderboardRequest.downloadHandler;
+
+			// Wait for the web request to complete
+			yield return leaderboardRequest.SendWebRequest();
+
+			if(leaderboardRequest.isHttpError || leaderboardRequest.isNetworkError || !string.IsNullOrEmpty(leaderboardRequest.error)){
+				GoogleAnalytics.Instance.LogError("Failed to get leaderboard data! " + leaderboardRequest.error);
+
+				foreach(string key in leaderboardKeys)
+				{
+					leaderboardStorage[key].isError = true;
+					leaderboardStorage[key].isActive = false;
+				}
+
+				if(debugMode == DebugModeTypes.Full)
+					Debug.Log("[DEBUG] Leaderboard failed for " + leaderboardId + " error: " + leaderboardRequest.error);
+
+				if(OnLeaderboardRequestFailed != null)
+					OnLeaderboardRequestFailed.Invoke(leaderboardKey, leaderboardRequest.error);
+
+				yield break;
+			}
+
+			string errorResponse;
+
+			if(IsErrorResponse(leaderboardKey, leaderboardDownloadHandler.text, out errorResponse)){
+				GoogleAnalytics.Instance.LogError("Failed to get leaderboard data! " + errorResponse);
+
+				foreach(string key in leaderboardKeys)
+				{
+					leaderboardStorage[key].isError = true;
+					leaderboardStorage[key].isActive = false;
+				}
+
+				if(debugMode == DebugModeTypes.Full)
+					Debug.Log("[DEBUG] Data failed for " + leaderboardKey + " error " + errorResponse);
+
+				if(OnLeaderboardRequestFailed != null)
+					OnLeaderboardRequestFailed.Invoke(leaderboardKey, errorResponse);
+
+				yield break;
+			}
+
+			try {
+				RawCombinedLeaderboardResponse combinedLeaderboardResponse = JsonUtility.FromJson<RawCombinedLeaderboardResponse>(leaderboardDownloadHandler.text);
+
+				for(int i=0;i < combinedLeaderboardResponse.response.Length;i++)
+				{
+					string key = combinedLeaderboardResponse.response[i].leaderboardId + deviceId + "_p" + combinedLeaderboardResponse.response[i].pageNum;
+
+					leaderboardStorage[key].response = combinedLeaderboardResponse.response[i].data;
+					leaderboardStorage[key].isReady = true;
+				}
+			} catch(System.Exception e){
+				GoogleAnalytics.Instance.LogError("Leaderboard JSON data invalid! " + e.Message, false);
+
+				foreach(string key in leaderboardKeys)
+				{
+					leaderboardStorage[key].isError = true;
+					leaderboardStorage[key].isActive = false;
+				}
+
+				if(debugMode == DebugModeTypes.Full)
+					Debug.Log("[DEBUG] Data failed for " + leaderboardKey + " error: " + e.Message);
+
+				if(OnLeaderboardRequestFailed != null)
+					OnLeaderboardRequestFailed.Invoke(leaderboardKey, e.Message);
+
+				yield break;
+			}
+
+			// Cleanup the request data
+			leaderboardRequest.Dispose();
+			leaderboardDownloadHandler.Dispose();
+
+			foreach(string key in leaderboardKeys)
+			{
+				leaderboardStorage[key].isReady = true;
+				leaderboardStorage[key].isActive = false;
+			}
+
+			if(debugMode == DebugModeTypes.Full){
+				foreach(string key in leaderboardKeys)
+				{
+					Debug.Log("[DEBUG] Data ready for " + key + " is " + leaderboardStorage[key].response);
+				}
+			}
+		} else {
+			cachedRequests++;
+
+			if(debugMode == DebugModeTypes.Full){
+				foreach(string key in leaderboardKeys)
+				{
+					Debug.Log("[DEBUG] Data ready for " + key + " is " + leaderboardStorage[key].response);
+				}
+			}
+		}
+
+		foreach(string key in leaderboardKeys)
+		{
+			// Trigger the OnLeaderboardDone action
+			if(OnLeaderboardDone != null)
+				OnLeaderboardDone.Invoke(key, leaderboardStorage[key]);
+		}
 	}
 
 	private IEnumerator DoGetLeaderboardData(string leaderboardId, string deviceId = "", TimePeriod timePeriod = TimePeriod.AllTime, int pageNum = 0, bool forceRefresh = false)
@@ -430,7 +892,7 @@ public class LeaderboardManager : MonoBehaviour {
 		if(!leaderboardStorage[leaderboardStorageRef].isReady || forceRefresh){
 			// Immediately check if we have an internet connection and exit early if not
 			if(Application.internetReachability == NetworkReachability.NotReachable){
-				if(selfRef.debugMode)
+				if(selfRef.debugMode == DebugModeTypes.Full)
 					Debug.Log("[DEBUG] Failed to get leaderboard for " + leaderboardId + "! No internet connection");
 
 				if(OnLeaderboardConnectionFailed != null)
@@ -442,40 +904,29 @@ public class LeaderboardManager : MonoBehaviour {
 			// Mark the rank as active (being processed)
 			leaderboardStorage[leaderboardStorageRef].isActive = true;
 
-			string requestURL = "https://data.i6.com/datastore.php?";
+			Dictionary<string, string> postData = new Dictionary<string, string>();
+			postData.Add("action", "get_leaderboard");
+			postData.Add("leaderboard", leaderboardId);
+			postData.Add("time", timePeriod.ToString());
+			postData.Add("page", pageNum.ToString());
+			postData.Add("perpage", resultsPerPage.ToString());
 
-			// The queryString variable is setup to match the PHP $_SERVER['QUERY_STRING'] variable
-			string queryString = "action=get_leaderboard";
-			queryString += "&platform=" + Application.platform.ToString();
-			queryString += "&package_name=" + packageName;
-			queryString += "&leaderboard=" + leaderboardId;
-			queryString += "&time=" + timePeriod;
-			queryString += "&page=" + pageNum;
-			queryString += "&perpage=" + resultsPerPage;
-			queryString += "&token=" + WWW.EscapeURL(GetSecurityToken(), Encoding.UTF8);
-			queryString += deviceId != string.Empty ? "&device=" + deviceId : "";
+			if(deviceId != string.Empty)
+				postData.Add("device", deviceId);
 
-			requestURL += queryString;
+			UnityWebRequest leaderboardRequest = DoWebRequest(postData, true, true);
+			DownloadHandler leaderboardDownloadHandler = leaderboardRequest.downloadHandler;
 
-			// The checksum allows us to validate that the requested URL matches the URL sent to the server
-			requestURL += "&checksum=" + WWW.EscapeURL(GenerateChecksum(queryString), Encoding.UTF8);
+			// Wait for the web request to complete
+			yield return leaderboardRequest.SendWebRequest();
 
-			if(debugMode)
-				Debug.Log("[DEBUG] Send request to: " + requestURL);
-
-			// Request the leaderboard data from the server
-			WWW leaderboardRequest = new WWW(requestURL);
-
-			while(!leaderboardRequest.isDone)
-				yield return null;
-
-			if(!string.IsNullOrEmpty(leaderboardRequest.error)){
+			if(leaderboardRequest.isHttpError || leaderboardRequest.isNetworkError || !string.IsNullOrEmpty(leaderboardRequest.error)){
 				GoogleAnalytics.Instance.LogError("Failed to get leaderboard data! " + leaderboardRequest.error);
 
 				leaderboardStorage[leaderboardStorageRef].isError = true;
 				leaderboardStorage[leaderboardStorageRef].isActive = false;
 
-				if(debugMode)
+				if(debugMode == DebugModeTypes.Full)
 					Debug.Log("[DEBUG] Leaderboard failed for " + leaderboardId + " error: " + leaderboardRequest.error);
 
 				if(OnLeaderboardRequestFailed != null)
@@ -486,13 +937,19 @@ public class LeaderboardManager : MonoBehaviour {
 
 			string errorResponse;
 
-			if(IsErrorResponse(leaderboardId, leaderboardRequest.text, out errorResponse)){
+			if(IsErrorResponse(leaderboardId, leaderboardDownloadHandler.text, out errorResponse)){
 				GoogleAnalytics.Instance.LogError("Failed to get leaderboard data! " + errorResponse);
 
 				leaderboardStorage[leaderboardStorageRef].isError = true;
 				leaderboardStorage[leaderboardStorageRef].isActive = false;
 
-				if(debugMode)
+				if(errorResponse == "ERROR_NO_RESULTS"){
+					// Cache the empty leaderboard when there's no results
+					leaderboardStorage[leaderboardStorageRef].response = new List<LeaderboardStorage>();
+					leaderboardStorage[leaderboardStorageRef].isReady = true;
+				}
+
+				if(debugMode == DebugModeTypes.Full)
 					Debug.Log("[DEBUG] Leaderboard failed for " + leaderboardId + " error: " + errorResponse);
 
 				if(OnLeaderboardRequestFailed != null)
@@ -503,7 +960,7 @@ public class LeaderboardManager : MonoBehaviour {
 
 			try {
 				#if UNITY_5_3_OR_NEWER
-					leaderboardStorage[leaderboardStorageRef] = JsonUtility.FromJson<LeaderboardResponse>(leaderboardRequest.text);
+					leaderboardStorage[leaderboardStorageRef] = JsonUtility.FromJson<LeaderboardResponse>(leaderboardDownloadHandler.text);
 
 					// Was trying with this to see if it would help.. but it didn't
 					//leaderboardStorage[leaderboardStorageRef] = new LeaderboardResponse();
@@ -512,7 +969,7 @@ public class LeaderboardManager : MonoBehaviour {
 					//leaderboardStorage[leaderboardStorageRef].response[0].nickname = "Test Successful";
 				#else
 					leaderboardStorage[leaderboardStorageRef].response = new List<LeaderboardStorage>();
-					JSONNode jsonData = JSON.Parse(leaderboardRequest.text);
+					JSONNode jsonData = JSON.Parse(leaderboardDownloadHandler.text);
 
 					// Iterate through each row of the leaderboard adding the results to the class storage
 					for(int rowId=0;rowId < jsonData["response"].AsArray.Count;rowId++)
@@ -536,7 +993,7 @@ public class LeaderboardManager : MonoBehaviour {
 				leaderboardStorage[leaderboardStorageRef].isError = true;
 				leaderboardStorage[leaderboardStorageRef].isActive = false;
 
-				if(debugMode)
+				if(debugMode == DebugModeTypes.Full)
 					Debug.Log("[DEBUG] Leaderboard failed for " + leaderboardId + " error: " + e.Message);
 
 				if(OnLeaderboardRequestFailed != null)
@@ -550,10 +1007,19 @@ public class LeaderboardManager : MonoBehaviour {
 			leaderboardStorage[leaderboardStorageRef].isReady = true;
 			leaderboardStorage[leaderboardStorageRef].isActive = false;
 
-			if(debugMode)
+			if(debugMode == DebugModeTypes.Full)
 				Debug.Log("[DEBUG] Leaderboard ready for " + leaderboardId + " found " + leaderboardStorage[leaderboardStorageRef].Count() + " rows");
 		} else {
-			if(debugMode)
+			cachedRequests++;
+
+			if(leaderboardStorage[leaderboardStorageRef].Count() <= 0){
+				if(OnLeaderboardRequestFailed != null)
+					OnLeaderboardRequestFailed.Invoke(leaderboardId, "ERROR_NO_RESULTS");
+
+				yield break;
+			}
+
+			if(debugMode == DebugModeTypes.Full)
 				Debug.Log("[DEBUG] Leaderboard for " + leaderboardId + " loaded from cache with " + leaderboardStorage[leaderboardStorageRef].Count() + " rows");
 		}
 
@@ -567,40 +1033,104 @@ public class LeaderboardManager : MonoBehaviour {
 		// Mark the leaderboard submission as true (active submission)
 		leaderboardSubmissions[leaderboardId] = true;
 
-		string requestURL = "https://data.i6.com/datastore.php?";
+		SubmissionCache cachedSubmission = leaderboardSubmissionCache.ContainsKey(leaderboardId + deviceId) ? leaderboardSubmissionCache[leaderboardId + deviceId] : null;
 
-		// The queryString variable is setup to match the PHP $_SERVER['QUERY_STRING'] variable
-		string queryString = "action=adjust_leaderboard";
-		queryString += "&platform=" + Application.platform.ToString();
-		queryString += "&package_name=" + packageName;
-		queryString += "&leaderboard=" + leaderboardId;
-		queryString += "&device=" + deviceId;
-		queryString += "&nickname=" + WWW.EscapeURL(nickname, Encoding.UTF8);
-		queryString += "&score=" + scoreAdjust;
-		queryString += "&perpage=" + resultsPerPage;
-		queryString += "&token=" + WWW.EscapeURL(GetSecurityToken(), Encoding.UTF8);
+		// Don't bother running the query unless either it has never been ran before, the nickname has changed or the scoreAdjustment is not 0
+		if(cachedSubmission == null || cachedSubmission.nickname != nickname || scoreAdjust != 0){
+			if(cachedSubmission == null){
+				leaderboardSubmissionCache.Add(leaderboardId + deviceId, new SubmissionCache(nickname, 0)); // As we're in the score adjustment function we can't cache a score yet
+			} else {
+				cachedSubmission.nickname = nickname;
+			}
 
-		requestURL += queryString;
+			Dictionary<string, string> postData = new Dictionary<string, string>();
+			postData.Add("action", "adjust_leaderboard");
+			postData.Add("leaderboard", leaderboardId);
+			postData.Add("nickname", WWW.EscapeURL(nickname, Encoding.UTF8));
+			postData.Add("score", scoreAdjust.ToString());
+			postData.Add("perpage", resultsPerPage.ToString());
 
-		// The checksum allows us to validate that the requested URL matches the URL sent to the server
-		requestURL += "&checksum=" + WWW.EscapeURL(GenerateChecksum(queryString), Encoding.UTF8);
+			if(deviceId != string.Empty)
+				postData.Add("device", deviceId);
 
-		if(debugMode)
-			Debug.Log("[DEBUG] Send request to: " + requestURL);
+			UnityWebRequest leaderboardRequest = DoWebRequest(postData, true, true);
+			DownloadHandler leaderboardDownloadHandler = leaderboardRequest.downloadHandler;
 
-		// Send the request to add this data to the leaderboard
-		WWW leaderboardRequest = new WWW(requestURL);
+			// Wait for the web request to complete
+			yield return leaderboardRequest.SendWebRequest();
 
-		while(!leaderboardRequest.isDone)
-			yield return null;
+			if(leaderboardRequest.isHttpError || leaderboardRequest.isNetworkError || !string.IsNullOrEmpty(leaderboardRequest.error)){
+				GoogleAnalytics.Instance.LogError("Failed to adjust leaderboard! " + leaderboardRequest.error);
 
-		if(!string.IsNullOrEmpty(leaderboardRequest.error)){
-			GoogleAnalytics.Instance.LogError("Failed to adjust leaderboard! " + leaderboardRequest.error);
+				leaderboardSubmissions[leaderboardId] = false;
+
+				if(debugMode == DebugModeTypes.Full)
+					Debug.Log("[DEBUG] Adjust failed for " + leaderboardId + " error: " + leaderboardRequest.error);
+
+				if(OnSubmitRequestFailed != null)
+					OnSubmitRequestFailed.Invoke(leaderboardId, leaderboardRequest.error);
+
+				yield break;
+			}
+
+			string errorResponse;
+
+			if(IsErrorResponse(leaderboardId, leaderboardDownloadHandler.text, out errorResponse)){
+				GoogleAnalytics.Instance.LogError("Failed to adjust leaderboard! " + errorResponse);
+
+				leaderboardSubmissions[leaderboardId] = false;
+
+				if(debugMode == DebugModeTypes.Full)
+					Debug.Log("[DEBUG] Adjust failed for " + leaderboardId + " error: " + errorResponse);
+
+				if(OnSubmitRequestFailed != null)
+					OnSubmitRequestFailed.Invoke(leaderboardId, errorResponse);
+
+				yield break;
+			}
+
+			// Cleanup the WWW request data
+			leaderboardRequest.Dispose();
+		} else {
+			cachedRequests++;
+		}
+
+		leaderboardSubmissions[leaderboardId] = false;
+
+		if(debugMode == DebugModeTypes.Full)
+			Debug.Log("[DEBUG] Adjust complete for " + leaderboardId + " with score " + scoreAdjust);
+
+		// Trigger the OnLeaderboardSubmitComplete action
+		if(OnSubmitDone != null)
+			OnSubmitDone.Invoke(leaderboardId);
+	}
+
+	private IEnumerator DoDeleteLeaderboardData(string leaderboardId, string deviceId)
+	{
+		// Mark the leaderboard submission as true (active submission)
+		leaderboardSubmissions[leaderboardId] = true;
+
+		Dictionary<string, string> postData = new Dictionary<string, string>();
+		postData.Add("action", "delete_leaderboard");
+		postData.Add("leaderboard", leaderboardId);
+		postData.Add("perpage", resultsPerPage.ToString());
+
+		if(deviceId != string.Empty)
+			postData.Add("device", deviceId);
+
+		UnityWebRequest leaderboardRequest = DoWebRequest(postData, true, true);
+		DownloadHandler leaderboardDownloadHandler = leaderboardRequest.downloadHandler;
+
+		// Wait for the web request to complete
+		yield return leaderboardRequest.SendWebRequest();
+
+		if(leaderboardRequest.isHttpError || leaderboardRequest.isNetworkError || !string.IsNullOrEmpty(leaderboardRequest.error)){
+			GoogleAnalytics.Instance.LogError("Failed to delete leaderboard! " + leaderboardRequest.error);
 
 			leaderboardSubmissions[leaderboardId] = false;
 
-			if(debugMode)
-				Debug.Log("[DEBUG] Adjust failed for " + leaderboardId + " error: " + leaderboardRequest.error);
+			if(debugMode == DebugModeTypes.Full)
+				Debug.Log("[DEBUG] Delete failed for " + leaderboardId + " error: " + leaderboardRequest.error);
 
 			if(OnSubmitRequestFailed != null)
 				OnSubmitRequestFailed.Invoke(leaderboardId, leaderboardRequest.error);
@@ -610,13 +1140,13 @@ public class LeaderboardManager : MonoBehaviour {
 
 		string errorResponse;
 
-		if(IsErrorResponse(leaderboardId, leaderboardRequest.text, out errorResponse)){
-			GoogleAnalytics.Instance.LogError("Failed to adjust leaderboard! " + errorResponse);
+		if(IsErrorResponse(leaderboardId, leaderboardDownloadHandler.text, out errorResponse)){
+			GoogleAnalytics.Instance.LogError("Failed to delete leaderboard! " + errorResponse);
 
 			leaderboardSubmissions[leaderboardId] = false;
 
-			if(debugMode)
-				Debug.Log("[DEBUG] Adjust failed for " + leaderboardId + " error: " + errorResponse);
+			if(debugMode == DebugModeTypes.Full)
+				Debug.Log("[DEBUG] Delete failed for " + leaderboardId + " error: " + errorResponse);
 
 			if(OnSubmitRequestFailed != null)
 				OnSubmitRequestFailed.Invoke(leaderboardId, errorResponse);
@@ -629,12 +1159,188 @@ public class LeaderboardManager : MonoBehaviour {
 
 		leaderboardSubmissions[leaderboardId] = false;
 
-		if(debugMode)
-			Debug.Log("[DEBUG] Adjust complete for " + leaderboardId + " with score " + scoreAdjust);
+		if(debugMode == DebugModeTypes.Full)
+			Debug.Log("[DEBUG] Delete complete for " + leaderboardId);
 
 		// Trigger the OnLeaderboardSubmitComplete action
 		if(OnSubmitDone != null)
 			OnSubmitDone.Invoke(leaderboardId);
+	}
+
+	private IEnumerator DoAdjustCombinedLeaderboardData(string leaderboardSubmissionKey, List<string> leaderboardId, List<int> scoreChange, string deviceId, string nickname)
+	{
+		// Mark the leaderboard submission as true (active submission)
+		leaderboardSubmissions[leaderboardSubmissionKey] = true;
+
+		string pendingQueryLeaderboardIds = "";
+		string pendingQueryScores = "";
+
+		for(int i=0;i < leaderboardId.Count;i++)
+		{
+			SubmissionCache cachedSubmission = leaderboardSubmissionCache.ContainsKey(leaderboardId[i] + deviceId) ? leaderboardSubmissionCache[leaderboardId[i] + deviceId] : null;
+
+			if(cachedSubmission == null || cachedSubmission.nickname != nickname || scoreChange[i] != 0){
+				if(cachedSubmission == null){
+					leaderboardSubmissionCache.Add(leaderboardId[i] + deviceId, new SubmissionCache(nickname, 0)); // As we're in the score adjustment function we can't cache a score yet
+				} else {
+					cachedSubmission.nickname = nickname;
+				}
+
+				pendingQueryLeaderboardIds += (!string.IsNullOrEmpty(pendingQueryLeaderboardIds) ? "," : "") + leaderboardId[i];
+				pendingQueryScores += (!string.IsNullOrEmpty(pendingQueryScores) ? "," : "") + scoreChange[i];
+			}
+		}
+
+		if(!string.IsNullOrEmpty(pendingQueryLeaderboardIds)){
+			Dictionary<string, string> postData = new Dictionary<string, string>();
+			postData.Add("action", "adjust_leaderboard_combined");
+			postData.Add("leaderboard", pendingQueryLeaderboardIds);
+			postData.Add("nickname", WWW.EscapeURL(nickname, Encoding.UTF8));
+			postData.Add("score", pendingQueryScores);
+			postData.Add("perpage", resultsPerPage.ToString());
+
+			if(deviceId != string.Empty)
+				postData.Add("device", deviceId);
+
+			UnityWebRequest leaderboardRequest = DoWebRequest(postData, true, true);
+			DownloadHandler leaderboardDownloadHandler = leaderboardRequest.downloadHandler;
+
+			// Wait for the web request to complete
+			yield return leaderboardRequest.SendWebRequest();
+
+			if(leaderboardRequest.isHttpError || leaderboardRequest.isNetworkError || !string.IsNullOrEmpty(leaderboardRequest.error)){
+				GoogleAnalytics.Instance.LogError("Failed to adjust combined leaderboard! " + leaderboardRequest.error);
+
+				leaderboardSubmissions[leaderboardSubmissionKey] = false;
+
+				if(debugMode == DebugModeTypes.Full)
+					Debug.Log("[DEBUG] Adjust combined failed for " + leaderboardSubmissionKey + " error: " + leaderboardRequest.error);
+
+				if(OnSubmitRequestFailed != null)
+					OnSubmitRequestFailed.Invoke(leaderboardSubmissionKey, leaderboardRequest.error);
+
+				yield break;
+			}
+
+			string errorResponse;
+
+			if(IsErrorResponse(leaderboardSubmissionKey, leaderboardDownloadHandler.text, out errorResponse)){
+				GoogleAnalytics.Instance.LogError("Failed to adjust combined leaderboard! " + errorResponse);
+
+				leaderboardSubmissions[leaderboardSubmissionKey] = false;
+
+				if(debugMode == DebugModeTypes.Full)
+					Debug.Log("[DEBUG] Adjust combined failed for " + leaderboardSubmissionKey + " error: " + errorResponse);
+
+				if(OnSubmitRequestFailed != null)
+					OnSubmitRequestFailed.Invoke(leaderboardSubmissionKey, errorResponse);
+
+				yield break;
+			}
+
+			// Cleanup the WWW request data
+			leaderboardRequest.Dispose();
+		} else {
+			cachedRequests++;
+		}
+
+		leaderboardSubmissions[leaderboardSubmissionKey] = false;
+
+		if(debugMode == DebugModeTypes.Full)
+			Debug.Log("[DEBUG] Adjust combined complete for " + leaderboardSubmissionKey);
+
+		// Trigger the OnLeaderboardSubmitComplete action
+		if(OnSubmitDone != null)
+			OnSubmitDone.Invoke(leaderboardSubmissionKey);
+	}
+
+	private IEnumerator DoSetCombinedLeaderboardData(string leaderboardSubmissionKey, List<string> leaderboardId, List<int> score, string deviceId, string nickname)
+	{
+		// Mark the leaderboard submission as true (active submission)
+		leaderboardSubmissions[leaderboardSubmissionKey] = true;
+
+		string pendingQueryLeaderboardIds = "";
+		string pendingQueryScores = "";
+
+		for(int i=0;i < leaderboardId.Count;i++)
+		{
+			SubmissionCache cachedSubmission = leaderboardSubmissionCache.ContainsKey(leaderboardId[i] + deviceId) ? leaderboardSubmissionCache[leaderboardId[i] + deviceId] : null;
+
+			// Don't bother running the query unless either has never been ran before, the nickname has changed or the score is not the same as the previous score
+			if(cachedSubmission == null || cachedSubmission.nickname != nickname || cachedSubmission.score != score[i]){
+				if(cachedSubmission == null){
+					leaderboardSubmissionCache.Add(leaderboardId[i] + deviceId, new SubmissionCache(nickname, score[i]));
+				} else {
+					cachedSubmission.nickname = nickname;
+					cachedSubmission.score = score[i];
+				}
+
+				pendingQueryLeaderboardIds += (!string.IsNullOrEmpty(pendingQueryLeaderboardIds) ? "," : "") + leaderboardId[i];
+				pendingQueryScores += (!string.IsNullOrEmpty(pendingQueryScores) ? "," : "") + score[i];
+			}
+		}
+
+		if(!string.IsNullOrEmpty(pendingQueryLeaderboardIds)){
+			Dictionary<string, string> postData = new Dictionary<string, string>();
+			postData.Add("action", "set_leaderboard_combined");
+			postData.Add("leaderboard", pendingQueryLeaderboardIds);
+			postData.Add("nickname", WWW.EscapeURL(nickname, Encoding.UTF8));
+			postData.Add("score", pendingQueryScores);
+			postData.Add("perpage", resultsPerPage.ToString());
+
+			if(deviceId != string.Empty)
+				postData.Add("device", deviceId);
+
+			UnityWebRequest leaderboardRequest = DoWebRequest(postData, true, true);
+			DownloadHandler leaderboardDownloadHandler = leaderboardRequest.downloadHandler;
+
+			// Wait for the web request to complete
+			yield return leaderboardRequest.SendWebRequest();
+
+			if(leaderboardRequest.isHttpError || leaderboardRequest.isNetworkError || !string.IsNullOrEmpty(leaderboardRequest.error)){
+				GoogleAnalytics.Instance.LogError("Failed to submit combined leaderboard! " + leaderboardRequest.error);
+
+				leaderboardSubmissions[leaderboardSubmissionKey] = false;
+
+				if(debugMode == DebugModeTypes.Full)
+					Debug.Log("[DEBUG] Submit combined failed for " + leaderboardSubmissionKey + " error: " + leaderboardRequest.error);
+
+				if(OnSubmitRequestFailed != null)
+					OnSubmitRequestFailed.Invoke(leaderboardSubmissionKey, leaderboardRequest.error);
+
+				yield break;
+			}
+
+			string errorResponse;
+
+			if(IsErrorResponse(leaderboardSubmissionKey, leaderboardDownloadHandler.text, out errorResponse)){
+				GoogleAnalytics.Instance.LogError("Failed to submit combined leaderboard! " + errorResponse);
+
+				leaderboardSubmissions[leaderboardSubmissionKey] = false;
+
+				if(debugMode == DebugModeTypes.Full)
+					Debug.Log("[DEBUG] Submit combined failed for " + leaderboardSubmissionKey + " error: " + errorResponse);
+
+				if(OnSubmitRequestFailed != null)
+					OnSubmitRequestFailed.Invoke(leaderboardSubmissionKey, errorResponse);
+
+				yield break;
+			}
+
+			// Cleanup the WWW request data
+			leaderboardRequest.Dispose();
+		} else {
+			cachedRequests++;
+		}
+
+		leaderboardSubmissions[leaderboardSubmissionKey] = false;
+
+		if(debugMode == DebugModeTypes.Full)
+			Debug.Log("[DEBUG] Submit combined complete for " + leaderboardSubmissionKey + " with score " + score);
+
+		// Trigger the OnLeaderboardSubmitComplete action
+		if(OnSubmitDone != null)
+			OnSubmitDone.Invoke(leaderboardSubmissionKey);
 	}
 
 	// Setting the leaderboard doesn't touch the Leaderboards[..] data just incase we're reading at the same time as submitting
@@ -643,69 +1349,72 @@ public class LeaderboardManager : MonoBehaviour {
 		// Mark the leaderboard submission as true (active submission)
 		leaderboardSubmissions[leaderboardId] = true;
 
-		string requestURL = "https://data.i6.com/datastore.php?";
+		SubmissionCache cachedSubmission = leaderboardSubmissionCache.ContainsKey(leaderboardId + deviceId) ? leaderboardSubmissionCache[leaderboardId + deviceId] : null;
 
-		// The queryString variable is setup to match the PHP $_SERVER['QUERY_STRING'] variable
-		string queryString = "action=set_leaderboard";
-		queryString += "&platform=" + Application.platform.ToString();
-		queryString += "&package_name=" + packageName;
-		queryString += "&leaderboard=" + leaderboardId;
-		queryString += "&device=" + deviceId;
-		queryString += "&nickname=" + WWW.EscapeURL(nickname, Encoding.UTF8);
-		queryString += "&score=" + score;
-		queryString += "&perpage=" + resultsPerPage;
-		queryString += "&token=" + WWW.EscapeURL(GetSecurityToken(), Encoding.UTF8);
+		// Don't bother running the query unless either it has never been ran before, the nickname has changed or the score is not the same as the previous score
+		if(cachedSubmission == null || cachedSubmission.nickname != nickname || cachedSubmission.score != score){
+			if(cachedSubmission == null){
+				leaderboardSubmissionCache.Add(leaderboardId + deviceId, new SubmissionCache(nickname, score));
+			} else {
+				cachedSubmission.nickname = nickname;
+				cachedSubmission.score = score;
+			}
 
-		requestURL += queryString;
+			Dictionary<string, string> postData = new Dictionary<string, string>();
+			postData.Add("action", "set_leaderboard");
+			postData.Add("leaderboard", leaderboardId);
+			postData.Add("nickname", WWW.EscapeURL(nickname, Encoding.UTF8));
+			postData.Add("score", score.ToString());
+			postData.Add("perpage", resultsPerPage.ToString());
 
-		// The checksum allows us to validate that the requested URL matches the URL sent to the server
-		requestURL += "&checksum=" + WWW.EscapeURL(GenerateChecksum(queryString), Encoding.UTF8);
+			if(deviceId != string.Empty)
+				postData.Add("device", deviceId);
 
-		if(debugMode)
-			Debug.Log("[DEBUG] Send request to: " + requestURL);
+			UnityWebRequest leaderboardRequest = DoWebRequest(postData, true, true);
+			DownloadHandler leaderboardDownloadHandler = leaderboardRequest.downloadHandler;
 
-		// Send the request to add this data to the leaderboard
-		WWW leaderboardRequest = new WWW(requestURL);
+			// Wait for the web request to complete
+			yield return leaderboardRequest.SendWebRequest();
 
-		while(!leaderboardRequest.isDone)
-			yield return null;
+			if(leaderboardRequest.isHttpError || leaderboardRequest.isNetworkError || !string.IsNullOrEmpty(leaderboardRequest.error)){
+				GoogleAnalytics.Instance.LogError("Failed to submit leaderboard! " + leaderboardRequest.error);
 
-		if(!string.IsNullOrEmpty(leaderboardRequest.error)){
-			GoogleAnalytics.Instance.LogError("Failed to submit leaderboard! " + leaderboardRequest.error);
+				leaderboardSubmissions[leaderboardId] = false;
 
-			leaderboardSubmissions[leaderboardId] = false;
+				if(debugMode == DebugModeTypes.Full)
+					Debug.Log("[DEBUG] Submit failed for " + leaderboardId + " error: " + leaderboardRequest.error);
 
-			if(debugMode)
-				Debug.Log("[DEBUG] Submit failed for " + leaderboardId + " error: " + leaderboardRequest.error);
+				if(OnSubmitRequestFailed != null)
+					OnSubmitRequestFailed.Invoke(leaderboardId, leaderboardRequest.error);
 
-			if(OnSubmitRequestFailed != null)
-				OnSubmitRequestFailed.Invoke(leaderboardId, leaderboardRequest.error);
+				yield break;
+			}
 
-			yield break;
+			string errorResponse;
+
+			if(IsErrorResponse(leaderboardId, leaderboardDownloadHandler.text, out errorResponse)){
+				GoogleAnalytics.Instance.LogError("Failed to submit leaderboard! " + errorResponse);
+
+				leaderboardSubmissions[leaderboardId] = false;
+
+				if(debugMode == DebugModeTypes.Full)
+					Debug.Log("[DEBUG] Submit failed for " + leaderboardId + " error: " + errorResponse);
+
+				if(OnSubmitRequestFailed != null)
+					OnSubmitRequestFailed.Invoke(leaderboardId, errorResponse);
+
+				yield break;
+			}
+
+			// Cleanup the WWW request data
+			leaderboardRequest.Dispose();
+		} else {
+			cachedRequests++;
 		}
-
-		string errorResponse;
-
-		if(IsErrorResponse(leaderboardId, leaderboardRequest.text, out errorResponse)){
-			GoogleAnalytics.Instance.LogError("Failed to submit leaderboard! " + errorResponse);
-
-			leaderboardSubmissions[leaderboardId] = false;
-
-			if(debugMode)
-				Debug.Log("[DEBUG] Submit failed for " + leaderboardId + " error: " + errorResponse);
-
-			if(OnSubmitRequestFailed != null)
-				OnSubmitRequestFailed.Invoke(leaderboardId, errorResponse);
-
-			yield break;
-		}
-
-		// Cleanup the WWW request data
-		leaderboardRequest.Dispose();
 
 		leaderboardSubmissions[leaderboardId] = false;
 
-		if(debugMode)
+		if(debugMode == DebugModeTypes.Full)
 			Debug.Log("[DEBUG] Submit complete for " + leaderboardId + " with score " + score);
 
 		// Trigger the OnLeaderboardSubmitComplete action
